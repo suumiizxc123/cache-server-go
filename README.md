@@ -1,69 +1,92 @@
-# Cache Server — Two-Tier Architecture (Go + gRPC + Redis Cluster + K8s)
+# Cache Server Go
 
-High-performance distributed cache server designed for **10 Gbps throughput** and **10M requests/second**.
+High-performance multi-layer cache server with binary content delivery (images, video, MPEG-TS).
 
 ## Architecture
 
 ```
-                    ┌──────────────────────────────────────────┐
-                    │            Kubernetes Cluster             │
-                    │                                          │
-  Client ──gRPC──► │  Cache Server (HPA: 3–50 pods)           │
-  Client ──HTTP──► │    ├── L1: In-Process (50μs, 92% hit)    │
-                    │    ├── L2: Redis Cluster (0.5ms)         │
-                    │    └── Origin: DB/API (10ms)             │
-                    │                                          │
-                    │  Redis Cluster (StatefulSet: 6 nodes)    │
-                    │    ├── 3 Primary Shards                  │
-                    │    └── 3 Replicas (auto-failover)        │
-                    └──────────────────────────────────────────┘
+                    ┌─── Production ────────────────────────────────┐
+                    │                                                │
+  Client ─────────►│  HAProxy (:80)     Load Balancer               │
+                    │    │                                           │
+                    │    ▼                                           │
+                    │  Nginx (:8081)     Disk Cache (2GB) + gzip    │
+                    │    ├── /assets/*  → Nginx Cache → MinIO       │
+                    │    └── /cache/*   → Go Server                 │
+                    │                                                │
+                    │  Go Server (:8080) L1 In-Memory + gRPC        │
+                    │    ├── L1: Sharded In-Process (50μs)          │
+                    │    ├── L2: Redis (0.5ms)                      │
+                    │    └── Origin: MinIO / DB (10ms)              │
+                    │                                                │
+                    │  Redis Master + Replica + Sentinel (HA)       │
+                    │  MinIO (S3-compatible object storage)          │
+                    │                                                │
+                    │  Prometheus → Alertmanager → Slack/Email       │
+                    │  Grafana + Loki + Promtail (logs)             │
+                    │  Node Exporter + Blackbox (infra)             │
+                    └───────────────────────────────────────────────┘
 ```
 
 ## Quick Start
 
-### Option 1: Docker (simplest)
+### Dev (fast, minimal)
+
 ```bash
-make docker-up          # Redis + cache server
-make smoke              # HTTP smoke test
-make loadtest           # 100K request benchmark
-make docker-down        # cleanup
+make dev              # Nginx + Go + Redis + MinIO
+make smoke            # HTTP smoke test
+make smoke-assets     # Binary content test
+make dev-down         # cleanup
 ```
 
-### Option 2: Redis Cluster + Local Server
+### Prod (full stack)
+
 ```bash
-make redis-cluster      # 6-node Redis Cluster
-REDIS_ADDRS=localhost:6381,localhost:6382,localhost:6383 make run
-make smoke-grpc         # gRPC smoke test
+make prod             # + HAProxy, Redis HA, Prometheus, Grafana, Loki
+make prod-ps          # check status
+make prod-logs        # all logs
+make prod-down        # cleanup
 ```
 
-### Option 3: Kubernetes
+### Load Test
+
 ```bash
-# Build and push image
-make docker-build
-docker tag cache-server:latest your-registry/cache-server:latest
-docker push your-registry/cache-server:latest
+# Generate test assets (28 files, ~100MB, includes MPEG-TS segments)
+make generate-assets
 
-# Deploy full stack
-make k8s-deploy         # namespace + Redis Cluster + cache server + HPA
-make k8s-status         # check pods, services, HPA
-make k8s-port-forward   # localhost:8080 (HTTP) + localhost:9090 (gRPC)
+# Test against localhost
+make loadtest-assets                        # Go server (:8080)
+make loadtest-assets-nginx                  # Nginx (:80 dev / :8081 prod)
+make loadtest-assets-ha                     # HAProxy → Nginx (:80 prod)
 
-# Smoke test
-make smoke
-make smoke-grpc
+# Test against remote server
+make loadtest-assets HOST=172.16.22.24
+make loadtest-remote HOST=172.16.22.24      # All 3 modes sequentially
+
+# Heavy load
+make loadtest-assets-heavy HOST=172.16.22.24  # 20K reqs, 200 workers
 ```
 
-### Option 4: Helm
+### Kubernetes
+
+```bash
+make k8s-deploy       # Full stack (namespace + Redis Cluster + app + HPA)
+make k8s-status       # Check pods, services, HPA
+make k8s-port-forward # localhost:8080 + :9090
+make k8s-delete       # Cleanup
+```
+
+### Helm
+
 ```bash
 helm install cache-server deploy/helm/cache-server \
-  --namespace cache-system --create-namespace \
-  --set image.repository=your-registry/cache-server \
-  --set redis.addrs="redis-cluster:6379"
+  --namespace cache-system --create-namespace
 ```
 
 ## API
 
 ### HTTP (port 8080)
+
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/cache/{key}` | Read (L1 → L2 → Origin) |
@@ -73,7 +96,18 @@ helm install cache-server deploy/helm/cache-server \
 | `GET` | `/stats` | Metrics |
 | `GET` | `/health` | Health check |
 
+### Binary Assets (port 8080)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/upload/{filename}` | Upload to MinIO |
+| `GET` | `/assets/{filename}` | Serve from MinIO |
+| `GET` | `/meta/{key}` | Asset metadata (Redis) |
+| `DELETE` | `/upload/{key}` | Delete asset |
+| `GET` | `/list-assets` | List all assets |
+
 ### gRPC (port 9090)
+
 | Method | Description |
 |--------|-------------|
 | `CacheService/Get` | Single key lookup |
@@ -82,13 +116,6 @@ helm install cache-server deploy/helm/cache-server \
 | `CacheService/BatchGet` | Multi-key pipeline |
 | `CacheService/BatchSet` | Multi-key write |
 | `CacheService/Stats` | Metrics |
-| `CacheService/Health` | Health check |
-
-```bash
-# gRPC examples (requires grpcurl)
-grpcurl -plaintext -d '{"key":"product:1"}' localhost:9090 cache.v1.CacheService/Get
-grpcurl -plaintext localhost:9090 cache.v1.CacheService/Stats
-```
 
 ## Configuration
 
@@ -96,65 +123,131 @@ grpcurl -plaintext localhost:9090 cache.v1.CacheService/Stats
 |----------|---------|-------------|
 | `SERVER_PORT` | `8080` | HTTP port |
 | `GRPC_PORT` | `9090` | gRPC port |
-| `L1_MAX_SIZE` | `50000` | Max L1 entries |
-| `L1_TTL` | `10s` | L1 TTL |
-| `REDIS_ADDRS` | `localhost:6379` | Redis Cluster addrs (comma-separated) |
+| `L1_MAX_SIZE` | `100000` | Max L1 entries |
+| `L1_TTL` | `30s` | L1 TTL |
+| `L2_TTL` | `10m` | L2 TTL |
+| `REDIS_ADDRS` | `redis:6379` | Redis address(es) |
 | `REDIS_POOL_SIZE` | `500` | Connections per node |
-| `L2_TTL` | `5m` | L2 TTL |
-| `ORIGIN_LATENCY` | `10ms` | Simulated DB latency |
+| `MINIO_ENDPOINT` | `minio:9000` | MinIO S3 endpoint |
+| `MINIO_BUCKET` | `assets` | MinIO bucket name |
 | `ENABLE_SINGLEFLIGHT` | `true` | Request coalescing |
 
 ## Project Structure
 
 ```
 cache-server-go/
-├── api/
-│   ├── proto/cache.proto           # gRPC service definition
-│   └── cachepb/cache.go           # Go message types
-├── cmd/server/main.go              # Entry point (HTTP + gRPC)
+├── cmd/server/main.go              # Entry point
 ├── internal/
 │   ├── cache/
 │   │   ├── l1.go                   # 256-shard in-process cache
-│   │   ├── l1_test.go             # Tests + benchmarks
-│   │   ├── l2.go                   # Redis Cluster client
+│   │   ├── l2.go                   # Redis client
 │   │   └── manager.go             # Two-tier orchestrator
+│   ├── binaryhandler/
+│   │   ├── handler.go             # Binary content upload/serve (MinIO)
+│   │   └── handler_test.go        # Unit tests
 │   ├── config/config.go           # Env configuration
-│   ├── grpcserver/server.go       # gRPC server + interceptors
+│   ├── grpcserver/server.go       # gRPC server
 │   ├── handler/handler.go         # HTTP REST handlers
 │   ├── metrics/metrics.go         # Atomic counters
-│   └── origin/origin.go           # Simulated DB
-├── deploy/
-│   ├── k8s/
-│   │   ├── namespace.yml          # cache-system namespace
-│   │   ├── configmap.yml          # Environment config
-│   │   ├── deployment.yml         # Cache server (3–50 pods)
-│   │   ├── service.yml            # ClusterIP + headless
-│   │   ├── hpa.yml                # Auto-scaling + PDB
-│   │   ├── redis-cluster.yml      # StatefulSet (6 nodes) + init job
-│   │   └── monitoring.yml         # ServiceMonitor + Grafana dashboard
-│   ├── redis-cluster/
-│   │   └── docker-compose.redis-cluster.yml
-│   └── helm/cache-server/
-│       ├── Chart.yaml
-│       ├── values.yaml
-│       └── templates/
+│   └── origin/origin.go           # Simulated origin
+├── api/
+│   ├── proto/cache.proto          # gRPC service definition
+│   └── cachepb/cache.go          # Generated types
 ├── scripts/
-│   ├── loadtest.go                # Zipfian load test
-│   └── prometheus.yml
-├── docker-compose.yml
+│   ├── loadtest.go               # Key-value load test
+│   ├── asset_loadtest.go         # Binary asset load test
+│   ├── generate_assets.sh        # Generate MPEG-TS + image test files
+│   └── grpc_test_client.go       # gRPC test client
+├── nginx/nginx.conf              # Reverse proxy + disk cache
+├── haproxy/haproxy.cfg           # Load balancer
+├── redis/sentinel.conf           # Redis Sentinel
+├── prometheus/
+│   ├── prometheus.yml            # Scrape config
+│   └── alerts.yml               # Alert rules
+├── alertmanager/config.yml       # Alert routing
+├── blackbox/config.yml           # External health probes
+├── promtail/config.yml           # Log shipping to Loki
+├── deploy/
+│   ├── k8s/                      # Kubernetes manifests
+│   ├── helm/cache-server/        # Helm chart
+│   └── redis-cluster/            # Redis Cluster compose
+├── docker-compose.yml            # DEV stack
+├── docker-compose.prod.yml       # PROD overlay
+├── .env.prod                     # Prod env vars
 ├── Dockerfile
-├── Makefile
-└── go.mod
+└── Makefile
 ```
 
-## Kubernetes Scaling
+## Dev vs Prod
 
-The HPA scales cache-server pods from 3 to 50 based on CPU (70%) and memory (80%):
+| | Dev (`make dev`) | Prod (`make prod`) |
+|---|---|---|
+| Nginx | :80 (direct) | :8081 (behind HAProxy) |
+| HAProxy | -- | :80, :443, stats :8404 |
+| Redis | Single node, 256MB | Master + Replica + Sentinel, 1GB |
+| MinIO | :9000, :9001 | :9000, :9001 |
+| Monitoring | -- | Prometheus, Alertmanager, Grafana |
+| Logging | -- | Loki + Promtail |
+| Exporters | -- | Node Exporter, Blackbox |
 
+## Ports
+
+| Port | Service | Mode |
+|------|---------|------|
+| 80 | Nginx (dev) / HAProxy (prod) | dev / prod |
+| 443 | HAProxy (HTTPS) | prod |
+| 3000 | Grafana | prod |
+| 3100 | Loki | prod |
+| 6379 | Redis | both |
+| 8080 | Go Cache Server (HTTP) | both |
+| 8081 | Nginx (direct) | prod |
+| 8404 | HAProxy Stats | prod |
+| 9000 | MinIO S3 API | both |
+| 9001 | MinIO Console | both |
+| 9090 | Go Cache Server (gRPC) | both |
+| 9091 | Prometheus | prod |
+| 9093 | Alertmanager | prod |
+| 9100 | Node Exporter | prod |
+| 9115 | Blackbox Exporter | prod |
+| 26379 | Redis Sentinel | prod |
+
+## Makefile Targets
+
+```bash
+# Build & Run
+make build              # Compile Go binary
+make run                # Run locally
+
+# Docker
+make dev                # Dev stack
+make dev-down           # Stop dev
+make prod               # Prod stack (full)
+make prod-down          # Stop prod
+make prod-ps            # Container status
+make prod-logs          # Tail all logs
+
+# Test
+make test               # Unit tests
+make bench              # Benchmarks
+make smoke              # HTTP smoke test
+make smoke-assets       # Binary content test
+
+# Load Test
+make loadtest                            # Key-value load test
+make loadtest-assets HOST=<ip>           # Go server
+make loadtest-assets-nginx HOST=<ip>     # Nginx direct
+make loadtest-assets-ha HOST=<ip>        # HAProxy
+make loadtest-remote HOST=<ip>           # All 3 modes
+make generate-assets                     # Create test files
+
+# Kubernetes
+make k8s-deploy         # Deploy full stack
+make k8s-status         # Check status
+make k8s-logs           # Tail logs
+make k8s-delete         # Cleanup
+
+# Helm
+make helm-install       # Install chart
+make helm-upgrade       # Upgrade
+make helm-uninstall     # Remove
 ```
- 3 pods  × 21K RPS  =   63K RPS   (idle)
-10 pods  × 21K RPS  =  210K RPS   (moderate)
-50 pods  × 21K RPS  = 1.05M RPS   (high load)
-```
-
-For 10M RPS target: scale to ~500 pods across multiple nodes, upgrade to 20-shard Redis Cluster.
