@@ -31,7 +31,8 @@ import (
 
 var (
 	uploadURL = flag.String("upload", "http://localhost:8080", "Go server upload endpoint")
-	useNginx  = flag.Bool("nginx", false, "Use Nginx (port 80) instead of Go server (port 8080) for reads")
+	useNginx  = flag.Bool("nginx", false, "Use Nginx+Squid hybrid (port 80) for reads")
+	useSquid  = flag.Bool("squid", false, "Use Squid directly (port 3128) for reads")
 	assetDir  = flag.String("assets", "sample-assets", "Directory with test assets")
 	numReqs   = flag.Int("n", 5000, "Total read requests")
 	conc      = flag.Int("c", 50, "Concurrent workers")
@@ -42,7 +43,20 @@ func readBaseURL() string {
 	if *useNginx {
 		return "http://localhost:80"
 	}
+	if *useSquid {
+		return "http://localhost:3128"
+	}
 	return "http://localhost:8080"
+}
+
+func modeName() string {
+	if *useNginx {
+		return "Nginx + Squid Hybrid (localhost:80)"
+	}
+	if *useSquid {
+		return "Squid Direct (localhost:3128)"
+	}
+	return "Go Cache Server (localhost:8080)"
 }
 
 type AssetInfo struct {
@@ -67,11 +81,7 @@ func main() {
 	fmt.Println("═══════════════════════════════════════════")
 	fmt.Println("  Binary Content Cache — Load Test")
 	fmt.Println("═══════════════════════════════════════════")
-	if *useNginx {
-		fmt.Println("  Mode: Nginx (localhost:80)")
-	} else {
-		fmt.Println("  Mode: Go Cache Server (localhost:8080)")
-	}
+	fmt.Printf("  Mode: %s\n", modeName())
 	fmt.Println()
 
 	// ── Phase 1: Discover assets ──
@@ -396,6 +406,10 @@ func detectMIME(name string) string {
 		return "image/svg+xml"
 	case ".mp4":
 		return "video/mp4"
+	case ".ts":
+		return "video/mp2t"
+	case ".m3u8":
+		return "application/vnd.apple.mpegurl"
 	case ".webm":
 		return "video/webm"
 	case ".css":

@@ -186,6 +186,12 @@ loadtest-assets-nginx:
 loadtest-assets-nginx-heavy:
 	go run ./scripts/asset_loadtest.go -n 20000 -c 200 -nginx=true
 
+loadtest-assets-squid:
+	go run ./scripts/asset_loadtest.go -squid=true
+
+loadtest-assets-squid-heavy:
+	go run ./scripts/asset_loadtest.go -n 20000 -c 200 -squid=true
+
 # ── Docker image build ──
 docker-build:
 	docker build -t cache-server:latest .
