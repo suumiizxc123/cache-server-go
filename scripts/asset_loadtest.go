@@ -32,8 +32,9 @@ import (
 var (
 	host      = flag.String("host", "localhost", "Target host/IP (e.g. 172.16.22.24)")
 	uploadURL = flag.String("upload", "", "Go server upload endpoint (auto-set from -host)")
-	useNginx  = flag.Bool("nginx", false, "Use Nginx cache (port 80) for reads")
-	useHA     = flag.Bool("ha", false, "Use HAProxy → Nginx (port 80) for reads")
+	useNginx   = flag.Bool("nginx", false, "Use Nginx direct (port 8081) for reads")
+	useVarnish = flag.Bool("varnish", false, "Use Varnish direct (port 6081) for reads")
+	useHA      = flag.Bool("ha", false, "Use HAProxy → Varnish → Nginx (port 80) for reads")
 	assetDir  = flag.String("assets", "sample-assets", "Directory with test assets")
 	numReqs   = flag.Int("n", 5000, "Total read requests")
 	conc      = flag.Int("c", 50, "Concurrent workers")
@@ -44,6 +45,9 @@ func readBaseURL() string {
 	if *useHA {
 		return fmt.Sprintf("http://%s:80", *host)
 	}
+	if *useVarnish {
+		return fmt.Sprintf("http://%s:6081", *host)
+	}
 	if *useNginx {
 		return fmt.Sprintf("http://%s:8081", *host)
 	}
@@ -52,7 +56,10 @@ func readBaseURL() string {
 
 func modeName() string {
 	if *useHA {
-		return fmt.Sprintf("HAProxy → Nginx (%s:80)", *host)
+		return fmt.Sprintf("HAProxy → Varnish → Nginx (%s:80)", *host)
+	}
+	if *useVarnish {
+		return fmt.Sprintf("Varnish Direct (%s:6081)", *host)
 	}
 	if *useNginx {
 		return fmt.Sprintf("Nginx Direct (%s:8081)", *host)

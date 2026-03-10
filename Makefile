@@ -203,17 +203,24 @@ loadtest-assets-nginx:
 loadtest-assets-nginx-heavy:
 	go run ./scripts/asset_loadtest.go -host=$(HOST) -n 20000 -c 200 -nginx=true
 
+loadtest-assets-varnish:
+	go run ./scripts/asset_loadtest.go -host=$(HOST) -varnish=true
+
+loadtest-assets-varnish-heavy:
+	go run ./scripts/asset_loadtest.go -host=$(HOST) -n 20000 -c 200 -varnish=true
+
 loadtest-assets-ha:
 	go run ./scripts/asset_loadtest.go -host=$(HOST) -ha=true
 
 loadtest-assets-ha-heavy:
 	go run ./scripts/asset_loadtest.go -host=$(HOST) -n 20000 -c 200 -ha=true
 
-# ── Remote server tests (all 3 modes) ──
+# ── Remote server tests (all modes) ──
 loadtest-remote:
 	@echo "══ Go Server (:8080) ══" && go run ./scripts/asset_loadtest.go -host=$(HOST) -read-only
 	@echo "══ Nginx Direct (:8081) ══" && go run ./scripts/asset_loadtest.go -host=$(HOST) -nginx=true -read-only
-	@echo "══ HAProxy → Nginx (:80) ══" && go run ./scripts/asset_loadtest.go -host=$(HOST) -ha=true -read-only
+	@echo "══ Varnish Direct (:6081) ══" && go run ./scripts/asset_loadtest.go -host=$(HOST) -varnish=true -read-only
+	@echo "══ HAProxy → Varnish → Nginx (:80) ══" && go run ./scripts/asset_loadtest.go -host=$(HOST) -ha=true -read-only
 
 # ── Docker image build ──
 docker-build:

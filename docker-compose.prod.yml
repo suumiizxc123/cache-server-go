@@ -15,8 +15,8 @@ version: "3.9"
 #    - Node Exporter + Blackbox (infrastructure monitoring)
 #
 #  Flow:
-#    Client → HAProxy(:80) → Nginx → disk cache → MinIO  [assets]
-#    Client → HAProxy(:80) → Nginx → Go server(:8080)    [API]
+#    Client → HAProxy(:80) → Varnish (RAM) → Nginx → Go/MinIO  [assets]
+#    Client → HAProxy(:80) → Varnish → Nginx → Go server       [API pass-through]
 # ═══════════════════════════════════════════════════════
 
 services:
@@ -58,6 +58,36 @@ services:
     restart: unless-stopped
 
   # ══════════════════════════════════════════
+  #  Varnish (RAM Cache — L0)
+  # ══════════════════════════════════════════
+
+  varnish:
+    image: varnish:7.4-alpine
+    container_name: cache-varnish
+    ports:
+      - "6081:6081"
+    volumes:
+      - ./varnish/default.vcl:/etc/varnish/default.vcl:ro
+    command: >
+      varnishd
+      -F
+      -a :6081
+      -f /etc/varnish/default.vcl
+      -s malloc,1G
+      -p thread_pools=2
+      -p thread_pool_min=50
+      -p thread_pool_max=1000
+      -p workspace_client=256k
+      -p workspace_backend=256k
+    depends_on:
+      - nginx
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+    restart: unless-stopped
+
+  # ══════════════════════════════════════════
   #  Load Balancer
   # ══════════════════════════════════════════
 
@@ -71,7 +101,7 @@ services:
     volumes:
       - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     depends_on:
-      - nginx
+      - varnish
     deploy:
       resources:
         limits:
