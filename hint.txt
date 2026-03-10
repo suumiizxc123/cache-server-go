@@ -1,14 +1,77 @@
+# ═══════════════════════════════════════════════════════
+#  Cache Server — Quick Reference
+# ═══════════════════════════════════════════════════════
+
 # ── DEV (хурдан, хөнгөн) ──
 make dev                    # nginx + go + redis + minio
 make dev-down
+make dev-logs
 
 # ── PROD (бүрэн stack) ──
-make prod                   # + haproxy, redis HA, prometheus, grafana, loki, alertmanager
+make prod                   # + haproxy, varnish, redis HA, prometheus, grafana, loki
 make prod-down
 make prod-ps                # status харах
 make prod-logs              # бүх log
 
-# ── Load test ──
-make loadtest-assets HOST=172.16.22.24
-make loadtest-assets-ha HOST=172.16.22.24
-make loadtest-remote HOST=172.16.22.24
+# ═══════════════════════════════════════════════════════
+#  Load Test Commands
+# ═══════════════════════════════════════════════════════
+
+# ── Standard (5000 reqs, 50 workers) ──
+make loadtest-assets-ha HOST=172.16.22.24         # HAProxy → Varnish → Nginx → MinIO (full stack)
+make loadtest-assets-varnish HOST=172.16.22.24    # Varnish → Nginx → MinIO (bypass HAProxy)
+make loadtest-assets-nginx HOST=172.16.22.24      # Nginx → MinIO (disk cache only)
+make loadtest-assets HOST=localhost                # Go direct (DEV only, :8080 prod-д нээгдээгүй!)
+
+# ── Heavy (20000 reqs, 200 workers) ──
+make loadtest-assets-ha-heavy HOST=172.16.22.24       # Full stack stress test
+make loadtest-assets-varnish-heavy HOST=172.16.22.24  # Varnish stress test
+make loadtest-assets-nginx-heavy HOST=172.16.22.24    # Nginx stress test
+
+# ── Read-only (upload алгасах, зөвхөн уншилт) ──
+go run ./scripts/asset_loadtest.go -host=172.16.22.24 -ha=true -read-only
+go run ./scripts/asset_loadtest.go -host=172.16.22.24 -ha=true -read-only -n 50000 -c 500
+
+# ═══════════════════════════════════════════════════════
+#  Tricks & Tips
+# ═══════════════════════════════════════════════════════
+
+# АНХААРУУЛГА: Server дээр K8s (Kubeflow) iptables-legacy порт 80-г эзлэсэн!
+# Тиймээс HAProxy порт 8888 дээр ажиллана (80 биш)
+#
+# PROD дээр Go :8080 порт НЭЭГДЭЭГҮЙ (replicas=4 тул port bind болохгүй)
+# Тиймээс `make loadtest-assets HOST=172.16.22.24` ажиллахгүй!
+# Заавал -ha, -varnish, эсвэл -nginx flag ашигла
+
+# Upload зам:
+#   -ha / -varnish горим          → :8888 (HAProxy) руу upload хийнэ
+#   default (Go direct)           → :8080 руу upload хийнэ (зөвхөн dev)
+
+# Cache давхаргууд:
+#   L0: Varnish (RAM, 1GB)     — хамгийн хурдан, /assets/* 7 хоног
+#   L1: Nginx (disk, 2GB)      — дискнээс, /assets/* 7 хоног
+#   L2: Go in-memory (512MB)   — LRU cache, size-based eviction
+#   L3: Redis (metadata only)  — key-value metadata
+#   Origin: MinIO              — S3-compatible object storage
+
+# Header-үүд:
+#   X-Cache: HIT/MISS          — Varnish тавина
+#   X-Cache-Status: HIT/MISS   — Nginx тавина
+
+# ── Monitoring (prod only) ──
+# Grafana:      http://172.16.22.24:3000  (admin/admin)
+# Prometheus:   http://172.16.22.24:9091
+# HAProxy:      http://172.16.22.24:8404/stats
+# MinIO:        http://172.16.22.24:9001  (minioadmin/minioadmin)
+# Alertmanager: http://172.16.22.24:9093
+
+# ── Docker debug ──
+docker compose -f docker-compose.yml -f docker-compose.prod.yml logs -f varnish
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec varnish varnishstat  # Varnish stats
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec varnish varnishlog   # Varnish log
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec nginx nginx -T       # Nginx config dump
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec redis redis-cli info # Redis info
+
+# ── Rebuild зөвхөн Go server (image cache алгасах) ──
+docker compose -f docker-compose.yml -f docker-compose.prod.yml build --no-cache cache-server
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d cache-server

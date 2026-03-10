@@ -43,7 +43,7 @@ var (
 
 func readBaseURL() string {
 	if *useHA {
-		return fmt.Sprintf("http://%s:80", *host)
+		return fmt.Sprintf("http://%s:8888", *host)
 	}
 	if *useVarnish {
 		return fmt.Sprintf("http://%s:6081", *host)
@@ -56,7 +56,7 @@ func readBaseURL() string {
 
 func modeName() string {
 	if *useHA {
-		return fmt.Sprintf("HAProxy → Varnish → Nginx (%s:80)", *host)
+		return fmt.Sprintf("HAProxy → Varnish → Nginx (%s:8888)", *host)
 	}
 	if *useVarnish {
 		return fmt.Sprintf("Varnish Direct (%s:6081)", *host)
@@ -89,11 +89,11 @@ func main() {
 	// Auto-set upload URL: use HAProxy/Nginx in prod (Go :8080 not exposed)
 	if *uploadURL == "" {
 		if *useHA {
-			*uploadURL = fmt.Sprintf("http://%s:80", *host)
+			*uploadURL = fmt.Sprintf("http://%s:8888", *host)
 		} else if *useNginx {
 			*uploadURL = fmt.Sprintf("http://%s:8081", *host)
 		} else if *useVarnish {
-			*uploadURL = fmt.Sprintf("http://%s:80", *host)
+			*uploadURL = fmt.Sprintf("http://%s:8888", *host)
 		} else {
 			*uploadURL = fmt.Sprintf("http://%s:8080", *host)
 		}
