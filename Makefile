@@ -2,7 +2,7 @@
 #  Makefile — Cache Server Build & Run Commands
 # ═══════════════════════════════════════════════════
 
-.PHONY: build run test bench docker-up docker-down clean lint \
+.PHONY: build run test bench dev dev-down prod prod-down clean lint \
         proto redis-cluster redis-cluster-down k8s-deploy k8s-delete helm-install helm-uninstall \
         smoke smoke-grpc smoke-assets
 
@@ -15,19 +15,33 @@ run: build
 	./bin/cache-server
 
 # ═══════════════════════════════════════
-#  Docker
+#  Docker — Dev & Prod
 # ═══════════════════════════════════════
 
-# Single Redis + cache server
-docker-up:
+PROD := -f docker-compose.yml -f docker-compose.prod.yml
+
+# Dev: nginx + go + redis + minio (fast startup)
+dev:
 	docker compose up -d --build
 
-docker-down:
+dev-down:
 	docker compose down -v
 
-# With Prometheus + Grafana
-docker-monitoring:
-	docker compose --profile monitoring up -d --build
+dev-logs:
+	docker compose logs -f
+
+# Prod: + haproxy, redis HA, monitoring, logging
+prod:
+	docker compose $(PROD) up -d --build
+
+prod-down:
+	docker compose $(PROD) down -v
+
+prod-logs:
+	docker compose $(PROD) logs -f
+
+prod-ps:
+	docker compose $(PROD) ps
 
 # ═══════════════════════════════════════
 #  Redis Cluster (6 nodes)
@@ -173,24 +187,33 @@ generate-assets:
 	bash scripts/generate_assets.sh
 
 # ── Upload all assets + load test binary caching ──
+# Use HOST=172.16.22.24 to test against a remote server
 # Use --nginx=true to test via Nginx (port 80), default uses Go server (port 8080)
+HOST ?= localhost
+
 loadtest-assets:
-	go run ./scripts/asset_loadtest.go
+	go run ./scripts/asset_loadtest.go -host=$(HOST)
 
 loadtest-assets-heavy:
-	go run ./scripts/asset_loadtest.go -n 20000 -c 200
+	go run ./scripts/asset_loadtest.go -host=$(HOST) -n 20000 -c 200
 
 loadtest-assets-nginx:
-	go run ./scripts/asset_loadtest.go -nginx=true
+	go run ./scripts/asset_loadtest.go -host=$(HOST) -nginx=true
 
 loadtest-assets-nginx-heavy:
-	go run ./scripts/asset_loadtest.go -n 20000 -c 200 -nginx=true
+	go run ./scripts/asset_loadtest.go -host=$(HOST) -n 20000 -c 200 -nginx=true
 
-loadtest-assets-squid:
-	go run ./scripts/asset_loadtest.go -squid=true
+loadtest-assets-ha:
+	go run ./scripts/asset_loadtest.go -host=$(HOST) -ha=true
 
-loadtest-assets-squid-heavy:
-	go run ./scripts/asset_loadtest.go -n 20000 -c 200 -squid=true
+loadtest-assets-ha-heavy:
+	go run ./scripts/asset_loadtest.go -host=$(HOST) -n 20000 -c 200 -ha=true
+
+# ── Remote server tests (all 3 modes) ──
+loadtest-remote:
+	@echo "══ Go Server (:8080) ══" && go run ./scripts/asset_loadtest.go -host=$(HOST) -read-only
+	@echo "══ Nginx Direct (:8081) ══" && go run ./scripts/asset_loadtest.go -host=$(HOST) -nginx=true -read-only
+	@echo "══ HAProxy → Nginx (:80) ══" && go run ./scripts/asset_loadtest.go -host=$(HOST) -ha=true -read-only
 
 # ── Docker image build ──
 docker-build:
@@ -204,3 +227,4 @@ lint:
 clean:
 	rm -rf bin/
 	docker compose down -v 2>/dev/null || true
+	docker compose -f docker-compose.yml -f docker-compose.prod.yml down -v 2>/dev/null || true

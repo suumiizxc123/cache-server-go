@@ -30,9 +30,10 @@ import (
 // ═══════════════════════════════════════════════════════════
 
 var (
-	uploadURL = flag.String("upload", "http://localhost:8080", "Go server upload endpoint")
-	useNginx  = flag.Bool("nginx", false, "Use Nginx+Squid hybrid (port 80) for reads")
-	useSquid  = flag.Bool("squid", false, "Use Squid directly (port 3128) for reads")
+	host      = flag.String("host", "localhost", "Target host/IP (e.g. 172.16.22.24)")
+	uploadURL = flag.String("upload", "", "Go server upload endpoint (auto-set from -host)")
+	useNginx  = flag.Bool("nginx", false, "Use Nginx cache (port 80) for reads")
+	useHA     = flag.Bool("ha", false, "Use HAProxy → Nginx (port 80) for reads")
 	assetDir  = flag.String("assets", "sample-assets", "Directory with test assets")
 	numReqs   = flag.Int("n", 5000, "Total read requests")
 	conc      = flag.Int("c", 50, "Concurrent workers")
@@ -40,23 +41,23 @@ var (
 )
 
 func readBaseURL() string {
+	if *useHA {
+		return fmt.Sprintf("http://%s:80", *host)
+	}
 	if *useNginx {
-		return "http://localhost:80"
+		return fmt.Sprintf("http://%s:8081", *host)
 	}
-	if *useSquid {
-		return "http://localhost:3128"
-	}
-	return "http://localhost:8080"
+	return fmt.Sprintf("http://%s:8080", *host)
 }
 
 func modeName() string {
+	if *useHA {
+		return fmt.Sprintf("HAProxy → Nginx (%s:80)", *host)
+	}
 	if *useNginx {
-		return "Nginx + Squid Hybrid (localhost:80)"
+		return fmt.Sprintf("Nginx Direct (%s:8081)", *host)
 	}
-	if *useSquid {
-		return "Squid Direct (localhost:3128)"
-	}
-	return "Go Cache Server (localhost:8080)"
+	return fmt.Sprintf("Go Cache Server (%s:8080)", *host)
 }
 
 type AssetInfo struct {
@@ -77,6 +78,11 @@ type Stats struct {
 
 func main() {
 	flag.Parse()
+
+	// Auto-set upload URL from host if not explicitly provided
+	if *uploadURL == "" {
+		*uploadURL = fmt.Sprintf("http://%s:8080", *host)
+	}
 
 	fmt.Println("═══════════════════════════════════════════")
 	fmt.Println("  Binary Content Cache — Load Test")
