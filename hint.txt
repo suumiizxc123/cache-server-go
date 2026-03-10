@@ -28,6 +28,14 @@ make loadtest-assets-ha-heavy HOST=172.16.22.24       # Full stack stress test
 make loadtest-assets-varnish-heavy HOST=172.16.22.24  # Varnish stress test
 make loadtest-assets-nginx-heavy HOST=172.16.22.24    # Nginx stress test
 
+# ── Small Assets (жижиг файл, Varnish RAM-д optimized, 200 файл ~16KB avg) ──
+make loadtest-small-ha HOST=172.16.22.24              # Standard (5000 reqs, 50 workers)
+make loadtest-small-ha-heavy HOST=172.16.22.24        # Heavy (20000 reqs, 200 workers)
+make loadtest-small-ha-ultra HOST=172.16.22.24        # Ultra (50000 reqs, 500 workers)
+make loadtest-small-nginx HOST=172.16.22.24           # Nginx direct
+make loadtest-small-varnish HOST=172.16.22.24         # Varnish direct
+make generate-assets-small                            # 200 файл дахин generate хийх
+
 # ── Read-only (upload алгасах, зөвхөн уншилт) ──
 go run ./scripts/asset_loadtest.go -host=172.16.22.24 -ha=true -read-only
 go run ./scripts/asset_loadtest.go -host=172.16.22.24 -ha=true -read-only -n 50000 -c 500
@@ -48,8 +56,8 @@ go run ./scripts/asset_loadtest.go -host=172.16.22.24 -ha=true -read-only -n 500
 #   default (Go direct)           → :8080 руу upload хийнэ (зөвхөн dev)
 
 # Cache давхаргууд:
-#   L0: Varnish (RAM, 1GB)     — хамгийн хурдан, /assets/* 7 хоног
-#   L1: Nginx (disk, 2GB)      — дискнээс, /assets/* 7 хоног
+#   L0: Varnish (RAM, 4GB)     — хамгийн хурдан, /assets/* 7 хоног
+#   L1: Nginx (disk, 10GB)     — дискнээс, /assets/* 7 хоног
 #   L2: Go in-memory (512MB)   — LRU cache, size-based eviction
 #   L3: Redis (metadata only)  — key-value metadata
 #   Origin: MinIO              — S3-compatible object storage
@@ -71,6 +79,26 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml exec varnish var
 docker compose -f docker-compose.yml -f docker-compose.prod.yml exec varnish varnishlog   # Varnish log
 docker compose -f docker-compose.yml -f docker-compose.prod.yml exec nginx nginx -T       # Nginx config dump
 docker compose -f docker-compose.yml -f docker-compose.prod.yml exec redis redis-cli info # Redis info
+
+# ═══════════════════════════════════════════════════════
+#  10 Gbps Tuning
+# ═══════════════════════════════════════════════════════
+
+# 1. OS kernel tuning (server дээр 1 удаа ажиллуулна):
+sudo bash scripts/sysctl-10g.sh
+
+# 2. Prod deploy (config-ууд аль хэдийн tuned):
+make prod                                # auto: Varnish 4GB RAM, Nginx 10GB disk, HAProxy 100K conn
+
+# 3. 100K тест:
+make loadtest-small-ha-100k HOST=172.16.22.24
+
+# Юу өөрчлөгдсөн (10 Gbps):
+#   HAProxy:  maxconn 4096 → 100000, nbthread 4, bufsize 32K, timeout 120s
+#   Varnish:  malloc 1G → 4G, threads 1000 → 5000, thread_pools 2 → 4
+#   Nginx:    workers auto, connections 65536, buffers 2x, disk cache 10G, reuseport
+#   Docker:   sysctls somaxconn=65535, memory limits up
+#   OS:       TCP buffers 16MB, file-max 2M, fastopen, tw_reuse
 
 # ── Rebuild зөвхөн Go server (image cache алгасах) ──
 docker compose -f docker-compose.yml -f docker-compose.prod.yml build --no-cache cache-server

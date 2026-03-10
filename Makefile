@@ -4,7 +4,10 @@
 
 .PHONY: build run test bench dev dev-down prod prod-down clean lint \
         proto redis-cluster redis-cluster-down k8s-deploy k8s-delete helm-install helm-uninstall \
-        smoke smoke-grpc smoke-assets
+        smoke smoke-grpc smoke-assets generate-assets generate-assets-small \
+        loadtest-small-ha loadtest-small-ha-heavy loadtest-small-ha-ultra \
+        loadtest-small-nginx loadtest-small-varnish loadtest-small-ha-100k \
+        swarm-init swarm-deploy swarm-down swarm-ps swarm-logs
 
 # ── Build ──
 build:
@@ -42,6 +45,22 @@ prod-logs:
 
 prod-ps:
 	docker compose $(PROD) ps
+
+# ── Swarm ──
+swarm-init:
+	docker swarm init
+
+swarm-deploy:
+	docker stack deploy -c docker-compose.yml -c docker-compose.prod.yml cache
+
+swarm-down:
+	docker stack rm cache
+
+swarm-ps:
+	docker stack services cache
+
+swarm-logs:
+	docker service logs -f cache_cache-server
 
 # ═══════════════════════════════════════
 #  Redis Cluster (6 nodes)
@@ -182,9 +201,12 @@ smoke-assets:
 	@echo ""
 	@echo "✅ Binary content caching test complete!"
 
-# ── Generate real test assets (various sizes) ──
+# ── Generate test assets ──
 generate-assets:
 	bash scripts/generate_assets.sh
+
+generate-assets-small:
+	bash scripts/generate_small_assets.sh 200
 
 # ── Upload all assets + load test binary caching ──
 # Use HOST=172.16.22.24 to test against a remote server
@@ -214,6 +236,25 @@ loadtest-assets-ha:
 
 loadtest-assets-ha-heavy:
 	go run ./scripts/asset_loadtest.go -host=$(HOST) -n 20000 -c 200 -ha=true
+
+# ── Small assets (Varnish RAM optimized, 200 files ~16KB avg) ──
+loadtest-small-ha:
+	go run ./scripts/asset_loadtest.go -host=$(HOST) -ha=true -assets=sample-assets-small
+
+loadtest-small-ha-heavy:
+	go run ./scripts/asset_loadtest.go -host=$(HOST) -ha=true -assets=sample-assets-small -n 20000 -c 200
+
+loadtest-small-ha-ultra:
+	go run ./scripts/asset_loadtest.go -host=$(HOST) -ha=true -assets=sample-assets-small -n 50000 -c 500
+
+loadtest-small-ha-100k:
+	go run ./scripts/asset_loadtest.go -host=$(HOST) -ha=true -assets=sample-assets-small -n 100000 -c 1000
+
+loadtest-small-nginx:
+	go run ./scripts/asset_loadtest.go -host=$(HOST) -nginx=true -assets=sample-assets-small
+
+loadtest-small-varnish:
+	go run ./scripts/asset_loadtest.go -host=$(HOST) -varnish=true -assets=sample-assets-small
 
 # ── Remote server tests (all modes) ──
 loadtest-remote:
