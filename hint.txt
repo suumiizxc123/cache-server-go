@@ -28,6 +28,14 @@ make loadtest-assets-ha-heavy HOST=172.16.22.24       # Full stack stress test
 make loadtest-assets-varnish-heavy HOST=172.16.22.24  # Varnish stress test
 make loadtest-assets-nginx-heavy HOST=172.16.22.24    # Nginx stress test
 
+# ── Small Assets (жижиг файл, Varnish RAM-д optimized, 200 файл ~16KB avg) ──
+make loadtest-small-ha HOST=172.16.22.24              # Standard (5000 reqs, 50 workers)
+make loadtest-small-ha-heavy HOST=172.16.22.24        # Heavy (20000 reqs, 200 workers)
+make loadtest-small-ha-ultra HOST=172.16.22.24        # Ultra (50000 reqs, 500 workers)
+make loadtest-small-nginx HOST=172.16.22.24           # Nginx direct
+make loadtest-small-varnish HOST=172.16.22.24         # Varnish direct
+make generate-assets-small                            # 200 файл дахин generate хийх
+
 # ── Read-only (upload алгасах, зөвхөн уншилт) ──
 go run ./scripts/asset_loadtest.go -host=172.16.22.24 -ha=true -read-only
 go run ./scripts/asset_loadtest.go -host=172.16.22.24 -ha=true -read-only -n 50000 -c 500

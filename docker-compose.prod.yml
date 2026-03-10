@@ -15,8 +15,8 @@ version: "3.9"
 #    - Node Exporter + Blackbox (infrastructure monitoring)
 #
 #  Flow:
-#    Client → HAProxy(:80) → Varnish (RAM) → Nginx → Go/MinIO  [assets]
-#    Client → HAProxy(:80) → Varnish → Nginx → Go server       [API pass-through]
+#    Client → HAProxy(:8888) → Varnish (RAM) → Nginx → Go/MinIO  [assets]
+#    Client → HAProxy(:8888) → Varnish → Nginx → Go server       [API pass-through]
 # ═══════════════════════════════════════════════════════
 
 services:
@@ -143,6 +143,7 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        mkdir -p /etc/redis
         cp /tmp/sentinel-base.conf /etc/redis/sentinel.conf
         redis-sentinel /etc/redis/sentinel.conf
     depends_on:
