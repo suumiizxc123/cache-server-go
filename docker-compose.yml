@@ -18,7 +18,7 @@ services:
     image: nginx:alpine
     container_name: cache-nginx
     ports:
-      - "80:80"
+      - "${NGINX_PORT:-80}:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - nginx-cache:/var/cache/nginx
