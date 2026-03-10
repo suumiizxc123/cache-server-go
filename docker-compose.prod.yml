@@ -78,7 +78,9 @@ services:
       -p thread_pool_min=50
       -p thread_pool_max=1000
       -p workspace_client=256k
-      -p workspace_backend=256k
+      -p workspace_backend=512k
+      -p http_resp_size=128k
+      -p http_resp_hdr_len=32k
     depends_on:
       - nginx
     deploy:
@@ -137,11 +139,17 @@ services:
     ports:
       - "26379:26379"
     volumes:
-      - ./redis/sentinel.conf:/etc/redis/sentinel.conf:ro
-    command: redis-sentinel /etc/redis/sentinel.conf
+      - ./redis/sentinel.conf:/tmp/sentinel-base.conf:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        cp /tmp/sentinel-base.conf /etc/redis/sentinel.conf
+        redis-sentinel /etc/redis/sentinel.conf
     depends_on:
       redis:
         condition: service_healthy
+      redis-replica:
+        condition: service_started
     restart: unless-stopped
 
   # ══════════════════════════════════════════

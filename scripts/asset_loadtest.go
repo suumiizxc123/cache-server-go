@@ -86,9 +86,17 @@ type Stats struct {
 func main() {
 	flag.Parse()
 
-	// Auto-set upload URL from host if not explicitly provided
+	// Auto-set upload URL: use HAProxy/Nginx in prod (Go :8080 not exposed)
 	if *uploadURL == "" {
-		*uploadURL = fmt.Sprintf("http://%s:8080", *host)
+		if *useHA {
+			*uploadURL = fmt.Sprintf("http://%s:80", *host)
+		} else if *useNginx {
+			*uploadURL = fmt.Sprintf("http://%s:8081", *host)
+		} else if *useVarnish {
+			*uploadURL = fmt.Sprintf("http://%s:80", *host)
+		} else {
+			*uploadURL = fmt.Sprintf("http://%s:8080", *host)
+		}
 	}
 
 	fmt.Println("═══════════════════════════════════════════")
@@ -208,7 +216,7 @@ func warmupCache(assets []AssetInfo) *Stats {
 		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 
-		cacheStatus := resp.Header.Get("X-Cache-Status")
+		cacheStatus := detectCacheHit(resp)
 		if cacheStatus == "HIT" {
 			atomic.AddInt64(&stats.cacheHits, 1)
 		} else {
@@ -301,7 +309,7 @@ func runLoadTest(assets []AssetInfo) *Stats {
 				resp.Body.Close()
 				atomic.AddInt64(&stats.totalBytes, n)
 
-				cacheStatus := resp.Header.Get("X-Cache-Status")
+				cacheStatus := detectCacheHit(resp)
 				if cacheStatus == "HIT" {
 					atomic.AddInt64(&stats.cacheHits, 1)
 				} else {
@@ -436,6 +444,20 @@ func detectMIME(name string) string {
 	default:
 		return "application/octet-stream"
 	}
+}
+
+// detectCacheHit checks multiple cache headers:
+//   X-Cache-Status (Nginx), X-Cache (Varnish), X-Cache-Status (Go in-memory)
+func detectCacheHit(resp *http.Response) string {
+	// Nginx sets X-Cache-Status
+	if v := resp.Header.Get("X-Cache-Status"); v == "HIT" {
+		return "HIT"
+	}
+	// Varnish sets X-Cache
+	if v := resp.Header.Get("X-Cache"); v == "HIT" {
+		return "HIT"
+	}
+	return "MISS"
 }
 
 func max(a, b int) int {

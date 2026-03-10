@@ -61,10 +61,15 @@ sub vcl_backend_response {
         unset beresp.http.Vary;
         set beresp.http.Cache-Control = "public, max-age=604800";
 
-        # Large objects: stream and cache up to 100MB
-        if (beresp.http.Content-Length ~ "^[0-9]{8,}") {
-            set beresp.do_stream = true;
-        }
+        # Always stream large binary content
+        set beresp.do_stream = true;
+    }
+
+    # Don't cache error responses
+    if (beresp.status >= 400) {
+        set beresp.ttl = 0s;
+        set beresp.uncacheable = true;
+        return (deliver);
     }
 }
 
