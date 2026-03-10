@@ -1,0 +1,90 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: cache-system
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 5s
+      evaluation_interval: 5s
+
+    scrape_configs:
+      - job_name: "cache-server"
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: ["cache-system"]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            regex: cache-server
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port]
+            target_label: __address__
+            regex: (.+)
+            replacement: ${1}
+
+      - job_name: "redis-cluster"
+        static_configs:
+          - targets: ["redis-exporter:9121"]
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cache-server-monitor
+  namespace: cache-system
+  labels:
+    app: cache-server
+spec:
+  selector:
+    matchLabels:
+      app: cache-server
+  endpoints:
+    - port: http
+      path: /stats
+      interval: 10s
+
+---
+# ── Grafana Dashboard ConfigMap ──
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cache-server-dashboard
+  namespace: cache-system
+  labels:
+    grafana_dashboard: "1"
+data:
+  cache-server.json: |
+    {
+      "dashboard": {
+        "title": "Cache Server Performance",
+        "panels": [
+          {
+            "title": "Requests Per Second",
+            "type": "graph",
+            "targets": [{"expr": "rate(cache_total_requests[1m])"}]
+          },
+          {
+            "title": "L1 Hit Rate",
+            "type": "gauge",
+            "targets": [{"expr": "cache_l1_hit_rate"}]
+          },
+          {
+            "title": "L2 Hit Rate",
+            "type": "gauge",
+            "targets": [{"expr": "cache_l2_hit_rate"}]
+          },
+          {
+            "title": "p99 Latency (μs)",
+            "type": "graph",
+            "targets": [{"expr": "cache_avg_latency_us"}]
+          },
+          {
+            "title": "Origin Calls/sec",
+            "type": "graph",
+            "targets": [{"expr": "rate(cache_origin_calls[1m])"}]
+          }
+        ]
+      }
+    }

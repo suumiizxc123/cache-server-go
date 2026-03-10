@@ -1,0 +1,66 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: cache-server-hpa
+  namespace: cache-system
+  labels:
+    app: cache-server
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: cache-server
+  minReplicas: 3
+  maxReplicas: 50  # Scale to 50 pods for 10M RPS target
+
+  metrics:
+    # ── CPU-based scaling ──
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+    # ── Memory-based scaling ──
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+  behavior:
+    # ── Scale Up: aggressive ──
+    scaleUp:
+      stabilizationWindowSeconds: 30   # wait 30s before scaling up
+      policies:
+        - type: Percent
+          value: 100                    # double pods in one step
+          periodSeconds: 30
+        - type: Pods
+          value: 10                     # add up to 10 pods at once
+          periodSeconds: 30
+      selectPolicy: Max
+
+    # ── Scale Down: conservative ──
+    scaleDown:
+      stabilizationWindowSeconds: 300  # wait 5 min before scaling down
+      policies:
+        - type: Percent
+          value: 10                     # remove max 10% at a time
+          periodSeconds: 60
+      selectPolicy: Min
+
+---
+# ── PodDisruptionBudget: always keep 80% available ──
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cache-server-pdb
+  namespace: cache-system
+spec:
+  minAvailable: "80%"
+  selector:
+    matchLabels:
+      app: cache-server

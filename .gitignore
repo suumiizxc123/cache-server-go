@@ -1,0 +1,22 @@
+# Binaries
+bin/
+*.exe
+asset_loadtest
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test assets (generated, large files)
+sample-assets/
+
+# Docker volumes
+data/
+
+# Go
+vendor/

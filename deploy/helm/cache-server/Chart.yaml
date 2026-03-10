@@ -1,0 +1,13 @@
+apiVersion: v2
+name: cache-server
+description: High-performance two-tier cache server (L1 in-process + L2 Redis Cluster)
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - cache
+  - redis
+  - grpc
+  - high-performance
+maintainers:
+  - name: Demo Team

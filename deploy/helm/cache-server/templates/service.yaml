@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-cache-server
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: cache-server
+    release: {{ .Release.Name }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app: cache-server
+    release: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ .Values.server.httpPort }}
+      targetPort: http
+    - name: grpc
+      port: {{ .Values.server.grpcPort }}
+      targetPort: grpc
+      appProtocol: grpc
+
+---
+# Headless for gRPC client-side LB
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-cache-server-headless
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app: cache-server
+    release: {{ .Release.Name }}
+  ports:
+    - name: grpc
+      port: {{ .Values.server.grpcPort }}
+      targetPort: grpc

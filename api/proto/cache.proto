@@ -1,0 +1,146 @@
+syntax = "proto3";
+
+package cache.v1;
+
+option go_package = "github.com/demo/cache-server/api/cachepb";
+
+// ═══════════════════════════════════════════════════════
+//  Cache Service — gRPC API Definition
+//
+//  High-performance binary protocol for cache operations.
+//  ~3-5x faster than JSON/HTTP for small payloads.
+// ═══════════════════════════════════════════════════════
+
+service CacheService {
+  // Get retrieves a value by key (L1 → L2 → Origin)
+  rpc Get(GetRequest) returns (GetResponse);
+
+  // Set writes a value to both cache layers
+  rpc Set(SetRequest) returns (SetResponse);
+
+  // Delete invalidates a key from both layers
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+
+  // BatchGet retrieves multiple keys in one round-trip
+  rpc BatchGet(BatchGetRequest) returns (BatchGetResponse);
+
+  // BatchSet writes multiple key-value pairs atomically
+  rpc BatchSet(BatchSetRequest) returns (BatchSetResponse);
+
+  // Stats returns real-time cache metrics
+  rpc Stats(StatsRequest) returns (StatsResponse);
+
+  // StreamGet opens a server-side stream for subscribing to key updates
+  rpc WatchKey(WatchKeyRequest) returns (stream WatchKeyResponse);
+
+  // Health check
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+// ── Request/Response Messages ──
+
+message GetRequest {
+  string key = 1;
+}
+
+message GetResponse {
+  bytes value = 1;
+  CacheHitSource source = 2;  // where the value was found
+  int64 latency_ns = 3;       // server-side latency in nanoseconds
+}
+
+message SetRequest {
+  string key = 1;
+  bytes value = 2;
+  int64 ttl_seconds = 3;  // optional: override default TTL
+}
+
+message SetResponse {
+  bool success = 1;
+}
+
+message DeleteRequest {
+  string key = 1;
+}
+
+message DeleteResponse {
+  bool success = 1;
+}
+
+message BatchGetRequest {
+  repeated string keys = 1;
+}
+
+message BatchGetResponse {
+  map<string, CacheEntry> entries = 1;
+  int32 hits = 2;
+  int32 misses = 3;
+}
+
+message BatchSetRequest {
+  repeated KeyValue entries = 1;
+  int64 ttl_seconds = 2;
+}
+
+message BatchSetResponse {
+  int32 success_count = 1;
+  int32 error_count = 2;
+}
+
+message KeyValue {
+  string key = 1;
+  bytes value = 2;
+}
+
+message CacheEntry {
+  bytes value = 1;
+  CacheHitSource source = 2;
+  bool found = 3;
+}
+
+message StatsRequest {}
+
+message StatsResponse {
+  int64 l1_hits = 1;
+  int64 l1_misses = 2;
+  double l1_hit_rate = 3;
+  int64 l2_hits = 4;
+  int64 l2_misses = 5;
+  double l2_hit_rate = 6;
+  int64 origin_calls = 7;
+  int64 origin_errors = 8;
+  int64 coalesced_calls = 9;
+  int64 total_requests = 10;
+  double avg_latency_us = 11;
+  double overall_hit_rate = 12;
+  int32 l1_size = 13;
+  uint32 l2_pool_active_conns = 14;
+}
+
+message WatchKeyRequest {
+  string key = 1;
+}
+
+message WatchKeyResponse {
+  string key = 1;
+  bytes value = 2;
+  string event_type = 3;  // "update" | "delete" | "expire"
+  int64 timestamp = 4;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;      // "healthy" | "degraded" | "unhealthy"
+  bool redis_connected = 2;
+  int64 uptime_seconds = 3;
+}
+
+// ── Enums ──
+
+enum CacheHitSource {
+  CACHE_HIT_SOURCE_UNSPECIFIED = 0;
+  CACHE_HIT_SOURCE_L1 = 1;          // in-process cache
+  CACHE_HIT_SOURCE_L2 = 2;          // Redis
+  CACHE_HIT_SOURCE_ORIGIN = 3;      // database/API
+}

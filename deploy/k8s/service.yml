@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cache-server
+  namespace: cache-system
+  labels:
+    app: cache-server
+spec:
+  type: ClusterIP
+  selector:
+    app: cache-server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+    - name: grpc
+      port: 9090
+      targetPort: grpc
+      protocol: TCP
+      appProtocol: grpc  # K8s 1.24+ for gRPC-aware load balancing
+
+---
+# Headless service for gRPC client-side load balancing
+apiVersion: v1
+kind: Service
+metadata:
+  name: cache-server-headless
+  namespace: cache-system
+  labels:
+    app: cache-server
+spec:
+  type: ClusterIP
+  clusterIP: None  # headless — returns all pod IPs
+  selector:
+    app: cache-server
+  ports:
+    - name: grpc
+      port: 9090
+      targetPort: grpc
+      protocol: TCP
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cache-server
+  namespace: cache-system
+  labels:
+    app: cache-server
