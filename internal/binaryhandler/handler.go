@@ -231,6 +231,10 @@ func detectContentType(filename string) string {
 		return "image/svg+xml"
 	case ".mp4":
 		return "video/mp4"
+	case ".ts":
+		return "video/mp2t"
+	case ".m3u8":
+		return "application/vnd.apple.mpegurl"
 	case ".webm":
 		return "video/webm"
 	case ".mov":

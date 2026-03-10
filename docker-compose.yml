@@ -1,10 +1,11 @@
 version: "3.9"
 
 # ═══════════════════════════════════════════════════════
-#  Docker Compose — Full Cache Stack
+#  Docker Compose — Full Cache Stack (Hybrid Nginx + Squid)
 #
 #  Services:
-#    - nginx:        Reverse proxy + binary content cache (disk+RAM)
+#    - nginx:        Reverse proxy (routing, gzip, SSL, CORS)
+#    - squid:        Disk-based binary content cache
 #    - cache-server: Go app (L1 in-process + L2 Redis + gRPC)
 #    - redis:        Metadata + key-value cache
 #    - minio:        S3-compatible object storage (images, video, SVG)
@@ -12,12 +13,13 @@ version: "3.9"
 #    - grafana:      Dashboard (optional)
 #
 #  Flow:
-#    Client → Nginx(:80) → [binary: disk cache] or [API: Go server]
+#    Client → Nginx(:80) → Squid(:3128) → MinIO  [binary assets]
+#    Client → Nginx(:80) → Go server(:8080)       [API/cache]
 #    Go server → L1 → Redis → Origin/MinIO
 # ═══════════════════════════════════════════════════════
 
 services:
-  # ── Nginx (Binary Content Cache + Reverse Proxy) ──
+  # ── Nginx (Reverse Proxy + Routing) ──
   nginx:
     image: nginx:alpine
     container_name: cache-nginx
@@ -25,14 +27,35 @@ services:
       - "80:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - nginx-cache:/var/cache/nginx
     depends_on:
       - cache-server
-      - minio
+      - squid
     deploy:
       resources:
         limits:
-          memory: 10mb
+          memory: 64M
+
+  # ── Squid (Disk-Based Binary Content Cache) ──
+  squid:
+    image: ubuntu/squid:latest
+    container_name: cache-squid
+    ports:
+      - "3128:3128"
+    volumes:
+      - ./squid/squid.conf:/etc/squid/squid.conf:ro
+      - squid-cache:/var/spool/squid
+    depends_on:
+      minio:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3128/ || true"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
   # ── Redis (L2 Metadata + Key-Value Cache) ──
   redis:
@@ -147,4 +170,4 @@ services:
 volumes:
   redis-data:
   minio-data:
-  nginx-cache:
+  squid-cache:

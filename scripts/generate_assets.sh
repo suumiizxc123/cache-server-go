@@ -222,7 +222,87 @@ echo "  Created clip-5mb.mp4 = 5,242,880 bytes"
 dd if=/dev/urandom of="$ASSET_DIR/video-25mb.mp4" bs=1024 count=25600 2>/dev/null
 echo "  Created video-25mb.mp4 = 26,214,400 bytes"
 
-# ── 5. Generate CSS/JS bundles ──
+# ── 5. Generate MPEG-TS segments (realistic HLS/streaming content) ──
+echo "→ Generating MPEG-TS segments..."
+
+# MPEG-TS uses 188-byte packets. Generate realistic TS files.
+python3 -c "
+import struct, os, hashlib
+
+def create_ts_segment(filename, duration_sec, bitrate_mbps):
+    \"\"\"Create a realistic MPEG-TS file with proper 188-byte packet structure.\"\"\"
+    target_size = int(duration_sec * bitrate_mbps * 1000000 / 8)
+    packets = target_size // 188
+
+    with open(filename, 'wb') as f:
+        for i in range(packets):
+            pkt = bytearray(188)
+            # Sync byte
+            pkt[0] = 0x47
+            # PID (13 bits) — alternate between video (0x100) and audio (0x101)
+            pid = 0x100 if i % 10 != 0 else 0x101
+            pkt[1] = (pid >> 8) & 0x1F
+            pkt[2] = pid & 0xFF
+            # Continuity counter (4 bits)
+            pkt[3] = 0x10 | (i & 0x0F)
+            # Fill payload with pseudo-random data (simulates compressed video)
+            h = hashlib.md5(struct.pack('>I', i)).digest()
+            for j in range(4, 188, 16):
+                end = min(j + 16, 188)
+                pkt[j:end] = h[:end-j]
+
+            f.write(bytes(pkt))
+
+    size = os.path.getsize(filename)
+    print(f'  Created {filename} ({duration_sec}s @ {bitrate_mbps}Mbps) = {size:,} bytes')
+
+# HLS-style segments: 2s, 6s, 10s at various bitrates
+create_ts_segment('$ASSET_DIR/segment-360p-001.ts', 2, 1)      # ~250KB  (low quality)
+create_ts_segment('$ASSET_DIR/segment-360p-002.ts', 6, 1)      # ~750KB
+create_ts_segment('$ASSET_DIR/segment-720p-001.ts', 2, 3)      # ~750KB  (HD)
+create_ts_segment('$ASSET_DIR/segment-720p-002.ts', 6, 3)      # ~2.25MB
+create_ts_segment('$ASSET_DIR/segment-1080p-001.ts', 2, 8)     # ~2MB   (Full HD)
+create_ts_segment('$ASSET_DIR/segment-1080p-002.ts', 6, 8)     # ~6MB
+create_ts_segment('$ASSET_DIR/segment-1080p-003.ts', 10, 8)    # ~10MB
+create_ts_segment('$ASSET_DIR/segment-4k-001.ts', 6, 20)       # ~15MB  (4K UHD)
+create_ts_segment('$ASSET_DIR/segment-4k-002.ts', 10, 20)      # ~25MB
+" 2>/dev/null || echo "  (TS generation failed)"
+
+# HLS master playlist
+cat > "$ASSET_DIR/master.m3u8" << 'M3U8'
+#EXTM3U
+#EXT-X-VERSION:3
+
+#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=640x360
+playlist-360p.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720
+playlist-720p.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=8000000,RESOLUTION=1920x1080
+playlist-1080p.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=20000000,RESOLUTION=3840x2160
+playlist-4k.m3u8
+M3U8
+
+# 1080p variant playlist
+cat > "$ASSET_DIR/playlist-1080p.m3u8" << 'M3U8'
+#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:10
+#EXT-X-MEDIA-SEQUENCE:0
+
+#EXTINF:2.0,
+segment-1080p-001.ts
+#EXTINF:6.0,
+segment-1080p-002.ts
+#EXTINF:10.0,
+segment-1080p-003.ts
+
+#EXT-X-ENDLIST
+M3U8
+
+echo "  Created HLS playlists (master.m3u8, playlist-1080p.m3u8)"
+
+# ── 6. Generate CSS/JS bundles ──
 echo "→ Generating CSS/JS bundles..."
 
 # Large CSS bundle (~200KB)
