@@ -30,10 +30,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: cache-server
     ports:
-      - "8080:8080"
-      - "9090:9090"
+      - "${GO_HTTP_PORT:-8080}:8080"
+      - "${GO_GRPC_PORT:-9090}:9090"
     environment:
       - SERVER_PORT=8080
       - GRPC_PORT=9090

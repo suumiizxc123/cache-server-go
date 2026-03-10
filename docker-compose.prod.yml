@@ -32,6 +32,8 @@ services:
     restart: unless-stopped
 
   cache-server:
+    deploy:
+      replicas: 4
     restart: unless-stopped
 
   redis:
