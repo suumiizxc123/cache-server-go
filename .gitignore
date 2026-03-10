@@ -14,7 +14,7 @@ asset_loadtest
 
 # Test assets (generated, large files)
 sample-assets/
-
+sample-assets-small/
 # Docker volumes
 data/
 
