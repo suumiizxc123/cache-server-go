@@ -1,0 +1,12 @@
+version: "3.9"
+
+# ═══════════════════════════════════════════════════════
+#  Dev overrides (auto-loaded by docker compose)
+#  Exposes Go server ports to host for direct access
+# ═══════════════════════════════════════════════════════
+
+services:
+  cache-server:
+    ports:
+      - "8080:8080"
+      - "9090:9090"
