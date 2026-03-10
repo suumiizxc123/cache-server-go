@@ -1,0 +1,14 @@
+# ── DEV (хурдан, хөнгөн) ──
+make dev                    # nginx + go + redis + minio
+make dev-down
+
+# ── PROD (бүрэн stack) ──
+make prod                   # + haproxy, redis HA, prometheus, grafana, loki, alertmanager
+make prod-down
+make prod-ps                # status харах
+make prod-logs              # бүх log
+
+# ── Load test ──
+make loadtest-assets HOST=172.16.22.24
+make loadtest-assets-ha HOST=172.16.22.24
+make loadtest-remote HOST=172.16.22.24

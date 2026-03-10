@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -19,21 +21,92 @@ import (
 // ═══════════════════════════════════════════════════════
 //  Binary Content Handler
 //
-//  Handles upload and metadata for binary files:
-//    - Images (PNG, JPG, WebP, GIF)
-//    - SVG
-//    - Video (MP4, WebM)
-//    - Any binary content
-//
-//  Storage: MinIO (S3-compatible) via minio-go SDK
-//  Metadata: Redis (fast key lookups)
-//  Delivery: Nginx proxy_cache (disk + RAM)
+//  L1: In-memory LRU cache (up to 512MB)
+//  L2: MinIO (S3-compatible object storage)
+//  Metadata: Redis
 // ═══════════════════════════════════════════════════════
+
+// cachedAsset holds binary content + metadata in memory.
+type cachedAsset struct {
+	data        []byte
+	contentType string
+	size        int64
+	cachedAt    time.Time
+}
+
+// assetCache is a simple concurrent cache with size-based eviction.
+type assetCache struct {
+	mu       sync.RWMutex
+	items    map[string]*cachedAsset
+	maxBytes int64
+	curBytes int64
+	hits     atomic.Int64
+	misses   atomic.Int64
+}
+
+func newAssetCache(maxBytes int64) *assetCache {
+	return &assetCache{
+		items:    make(map[string]*cachedAsset),
+		maxBytes: maxBytes,
+	}
+}
+
+func (c *assetCache) get(key string) (*cachedAsset, bool) {
+	c.mu.RLock()
+	item, ok := c.items[key]
+	c.mu.RUnlock()
+	if ok {
+		c.hits.Add(1)
+		return item, true
+	}
+	c.misses.Add(1)
+	return nil, false
+}
+
+func (c *assetCache) set(key string, asset *cachedAsset) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// If already exists, subtract old size
+	if old, ok := c.items[key]; ok {
+		c.curBytes -= int64(len(old.data))
+	}
+
+	// Evict oldest entries if over budget
+	newSize := int64(len(asset.data))
+	for c.curBytes+newSize > c.maxBytes && len(c.items) > 0 {
+		var oldestKey string
+		var oldestTime time.Time
+		for k, v := range c.items {
+			if oldestKey == "" || v.cachedAt.Before(oldestTime) {
+				oldestKey = k
+				oldestTime = v.cachedAt
+			}
+		}
+		if oldestKey != "" {
+			c.curBytes -= int64(len(c.items[oldestKey].data))
+			delete(c.items, oldestKey)
+		}
+	}
+
+	c.items[key] = asset
+	c.curBytes += newSize
+}
+
+func (c *assetCache) remove(key string) {
+	c.mu.Lock()
+	if item, ok := c.items[key]; ok {
+		c.curBytes -= int64(len(item.data))
+		delete(c.items, key)
+	}
+	c.mu.Unlock()
+}
 
 type BinaryHandler struct {
 	minioClient *minio.Client
 	minioBucket string
 	redis       redis.UniversalClient
+	cache       *assetCache
 }
 
 type AssetMeta struct {
@@ -56,6 +129,7 @@ func New(minioEndpoint, minioBucket, accessKey, secretKey string, redisClient re
 		minioClient: client,
 		minioBucket: minioBucket,
 		redis:       redisClient,
+		cache:       newAssetCache(512 * 1024 * 1024), // 512MB in-memory cache
 	}
 }
 
@@ -90,8 +164,6 @@ func (h *BinaryHandler) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	// Upload to MinIO via SDK (with proper S3 auth)
-	// Object key is just the filename — no extra prefix
 	objectKey := filename
 	reader := bytes.NewReader(body)
 
@@ -118,6 +190,14 @@ func (h *BinaryHandler) upload(w http.ResponseWriter, r *http.Request) {
 	})
 	h.redis.SAdd(ctx, "assets:index", objectKey)
 
+	// Pre-populate in-memory cache
+	h.cache.set(objectKey, &cachedAsset{
+		data:        body,
+		contentType: contentType,
+		size:        int64(len(body)),
+		cachedAt:    time.Now(),
+	})
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	fmt.Fprintf(w, `{"status":"uploaded","key":"%s","url":"%s","size":%d,"content_type":"%s"}`,
@@ -126,7 +206,7 @@ func (h *BinaryHandler) upload(w http.ResponseWriter, r *http.Request) {
 	slog.Info("asset uploaded", "key", objectKey, "size", info.Size, "type", contentType)
 }
 
-// GET /assets/{filename} — Serve binary content from MinIO
+// GET /assets/{filename} — Serve binary content (L1 memory → L2 MinIO)
 func (h *BinaryHandler) serveAsset(w http.ResponseWriter, r *http.Request) {
 	filename := r.PathValue("filename")
 	if filename == "" {
@@ -134,6 +214,17 @@ func (h *BinaryHandler) serveAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// L1: Check in-memory cache first
+	if cached, ok := h.cache.get(filename); ok {
+		w.Header().Set("Content-Type", cached.contentType)
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", cached.size))
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Header().Set("X-Cache-Status", "HIT")
+		w.Write(cached.data)
+		return
+	}
+
+	// L2: Fetch from MinIO
 	obj, err := h.minioClient.GetObject(r.Context(), h.minioBucket, filename, minio.GetObjectOptions{})
 	if err != nil {
 		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
@@ -147,10 +238,26 @@ func (h *BinaryHandler) serveAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Read full content to cache it
+	data, err := io.ReadAll(obj)
+	if err != nil {
+		http.Error(w, `{"error":"read failed"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// Cache for next time
+	h.cache.set(filename, &cachedAsset{
+		data:        data,
+		contentType: info.ContentType,
+		size:        info.Size,
+		cachedAt:    time.Now(),
+	})
+
 	w.Header().Set("Content-Type", info.ContentType)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size))
 	w.Header().Set("Cache-Control", "public, max-age=86400")
-	io.Copy(w, obj)
+	w.Header().Set("X-Cache-Status", "MISS")
+	w.Write(data)
 }
 
 // GET /meta/{key} — Get asset metadata from Redis
@@ -172,7 +279,7 @@ func (h *BinaryHandler) getMeta(w http.ResponseWriter, r *http.Request) {
 		key, result["content_type"], result["size"], result["url"], result["uploaded_at"])
 }
 
-// DELETE /upload/{key} — Delete asset from MinIO + Redis
+// DELETE /upload/{key} — Delete asset from MinIO + Redis + cache
 func (h *BinaryHandler) deleteAsset(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	if key == "" {
@@ -191,6 +298,9 @@ func (h *BinaryHandler) deleteAsset(w http.ResponseWriter, r *http.Request) {
 	// Delete metadata from Redis
 	h.redis.Del(ctx, "asset:"+key)
 	h.redis.SRem(ctx, "assets:index", key)
+
+	// Delete from in-memory cache
+	h.cache.remove(key)
 
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, `{"status":"deleted","key":"%s"}`, key)
