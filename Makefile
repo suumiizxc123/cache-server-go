@@ -18,9 +18,9 @@ run: build
 #  Docker — Dev & Prod
 # ═══════════════════════════════════════
 
-PROD := -f docker-compose.yml -f docker-compose.prod.yml
+PROD := --env-file .env.prod -f docker-compose.yml -f docker-compose.prod.yml
 
-# Dev: nginx + go + redis + minio (fast startup)
+# Dev: nginx(:80) + go + redis + minio
 dev:
 	docker compose up -d --build
 
