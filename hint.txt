@@ -72,7 +72,8 @@ make loadtest-assets-nginx HOST=172.16.22.24                 # Nginx шууд
 
 # ── Small Assets (200 файл, ~3MB, Varnish RAM-д optimize) ──
 make generate-assets-small                                   # sample-assets-small/ руу generate
-make loadtest-small-dev                                      # local dev (localhost:8080)
+make loadtest-small-dev                                      # local dev (127.0.0.1:8080)
+make loadtest-small-dev LOCAL_HOST=192.168.0.16             # LAN IP (өөр machine-ээс тест хийхэд)
 make loadtest-small-dev-heavy                                # local dev heavy
 make loadtest-small-ha HOST=172.16.22.24                     # 5K reqs, 50 workers
 make loadtest-small-ha-heavy HOST=172.16.22.24               # 20K reqs, 200 workers
@@ -108,6 +109,10 @@ go run ./scripts/asset_loadtest.go \
 # Upload зам:
 #   -ha / -varnish горим          → :8888 (HAProxy) руу upload хийнэ
 #   default (Go direct)           → :8080 руу upload хийнэ (зөвхөн dev)
+#
+# IP зөвлөмж:
+#   172.0.0.1 нь ихэнх local LAN setup-д буруу байдаг.
+#   Private LAN range ашигла: 192.168.x.x, 10.x.x.x, эсвэл 172.16.x.x–172.31.x.x
 
 # Nginx cache цэвэрлэх (cached 404 болон бусад):
 #   docker compose exec nginx rm -rf /var/cache/nginx/assets
