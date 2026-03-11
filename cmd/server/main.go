@@ -99,6 +99,7 @@ func main() {
 	binHandler.RegisterRoutes(mux)
 
 	var httpHandler http.Handler = mux
+	httpHandler = handler.RecoveryMiddleware(httpHandler)
 	httpHandler = handler.CORSMiddleware(httpHandler)
 	httpHandler = handler.LoggingMiddleware(httpHandler)
 

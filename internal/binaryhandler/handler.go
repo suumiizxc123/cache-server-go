@@ -142,8 +142,17 @@ func (h *BinaryHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /list-assets", h.listAssets)
 }
 
+func (h *BinaryHandler) ready() bool {
+	return h != nil && h.minioClient != nil && h.redis != nil
+}
+
 // POST /upload/{filename} — Upload binary content to MinIO
 func (h *BinaryHandler) upload(w http.ResponseWriter, r *http.Request) {
+	if !h.ready() {
+		http.Error(w, `{"error":"binary storage backend unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
 	filename := r.PathValue("filename")
 	if filename == "" {
 		http.Error(w, `{"error":"filename required"}`, http.StatusBadRequest)
@@ -182,13 +191,17 @@ func (h *BinaryHandler) upload(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	assetURL := fmt.Sprintf("/assets/%s", filename)
 
-	h.redis.HSet(ctx, "asset:"+objectKey, map[string]interface{}{
+	if err := h.redis.HSet(ctx, "asset:"+objectKey, map[string]interface{}{
 		"content_type": contentType,
 		"size":         info.Size,
 		"url":          assetURL,
 		"uploaded_at":  time.Now().Unix(),
-	})
-	h.redis.SAdd(ctx, "assets:index", objectKey)
+	}).Err(); err != nil {
+		slog.Warn("redis hset failed", "error", err, "key", objectKey)
+	}
+	if err := h.redis.SAdd(ctx, "assets:index", objectKey).Err(); err != nil {
+		slog.Warn("redis sadd failed", "error", err, "key", objectKey)
+	}
 
 	// Pre-populate in-memory cache
 	h.cache.set(objectKey, &cachedAsset{
@@ -208,6 +221,11 @@ func (h *BinaryHandler) upload(w http.ResponseWriter, r *http.Request) {
 
 // GET /assets/{filename} — Serve binary content (L1 memory → L2 MinIO)
 func (h *BinaryHandler) serveAsset(w http.ResponseWriter, r *http.Request) {
+	if !h.ready() {
+		http.Error(w, `{"error":"binary storage backend unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
 	filename := r.PathValue("filename")
 	if filename == "" {
 		http.Error(w, `{"error":"filename required"}`, http.StatusBadRequest)
@@ -262,6 +280,11 @@ func (h *BinaryHandler) serveAsset(w http.ResponseWriter, r *http.Request) {
 
 // GET /meta/{key} — Get asset metadata from Redis
 func (h *BinaryHandler) getMeta(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.redis == nil {
+		http.Error(w, `{"error":"metadata backend unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
 	key := r.PathValue("key")
 	if key == "" {
 		http.Error(w, `{"error":"key required"}`, http.StatusBadRequest)
@@ -281,6 +304,11 @@ func (h *BinaryHandler) getMeta(w http.ResponseWriter, r *http.Request) {
 
 // DELETE /upload/{key} — Delete asset from MinIO + Redis + cache
 func (h *BinaryHandler) deleteAsset(w http.ResponseWriter, r *http.Request) {
+	if !h.ready() {
+		http.Error(w, `{"error":"binary storage backend unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
 	key := r.PathValue("key")
 	if key == "" {
 		http.Error(w, `{"error":"key required"}`, http.StatusBadRequest)
@@ -296,8 +324,12 @@ func (h *BinaryHandler) deleteAsset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Delete metadata from Redis
-	h.redis.Del(ctx, "asset:"+key)
-	h.redis.SRem(ctx, "assets:index", key)
+	if err := h.redis.Del(ctx, "asset:"+key).Err(); err != nil {
+		slog.Warn("redis del failed", "error", err, "key", key)
+	}
+	if err := h.redis.SRem(ctx, "assets:index", key).Err(); err != nil {
+		slog.Warn("redis srem failed", "error", err, "key", key)
+	}
 
 	// Delete from in-memory cache
 	h.cache.remove(key)
@@ -308,6 +340,11 @@ func (h *BinaryHandler) deleteAsset(w http.ResponseWriter, r *http.Request) {
 
 // GET /list-assets — List all asset keys
 func (h *BinaryHandler) listAssets(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.redis == nil {
+		http.Error(w, `{"error":"metadata backend unavailable"}`, http.StatusServiceUnavailable)
+		return
+	}
+
 	keys, err := h.redis.SMembers(context.Background(), "assets:index").Result()
 	if err != nil {
 		http.Error(w, `{"error":"failed to list"}`, http.StatusInternalServerError)
