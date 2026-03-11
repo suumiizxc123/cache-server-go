@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"strings"
 
 	"github.com/demo/cache-server/internal/cache"
@@ -167,6 +168,25 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		if !strings.HasPrefix(r.URL.Path, "/health") {
 			slog.Info("request", "method", r.Method, "path", r.URL.Path)
 		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RecoveryMiddleware prevents request panics from surfacing as connection resets.
+func RecoveryMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("panic recovered",
+					"panic", rec,
+					"method", r.Method,
+					"path", r.URL.Path,
+					"stack", string(debug.Stack()),
+				)
+				w.Header().Set("Content-Type", "application/json")
+				http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			}
+		}()
 		next.ServeHTTP(w, r)
 	})
 }

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,15 +32,15 @@ import (
 // ═══════════════════════════════════════════════════════════
 
 var (
-	host      = flag.String("host", "localhost", "Target host/IP (e.g. 172.16.22.24)")
-	uploadURL = flag.String("upload", "", "Go server upload endpoint (auto-set from -host)")
+	host       = flag.String("host", "localhost", "Target host/IP (e.g. 172.16.22.24)")
+	uploadURL  = flag.String("upload", "", "Go server upload endpoint (auto-set from -host)")
 	useNginx   = flag.Bool("nginx", false, "Use Nginx direct (port 8081) for reads")
 	useVarnish = flag.Bool("varnish", false, "Use Varnish direct (port 6081) for reads")
 	useHA      = flag.Bool("ha", false, "Use HAProxy → Varnish → Nginx (port 80) for reads")
-	assetDir  = flag.String("assets", "sample-assets", "Directory with test assets")
-	numReqs   = flag.Int("n", 5000, "Total read requests")
-	conc      = flag.Int("c", 50, "Concurrent workers")
-	readOnly  = flag.Bool("read-only", false, "Skip upload, test reads only")
+	assetDir   = flag.String("assets", "sample-assets", "Directory with test assets")
+	numReqs    = flag.Int("n", 5000, "Total read requests")
+	conc       = flag.Int("c", 50, "Concurrent workers")
+	readOnly   = flag.Bool("read-only", false, "Skip upload, test reads only")
 )
 
 func readBaseURL() string {
@@ -86,7 +88,8 @@ type Stats struct {
 func main() {
 	flag.Parse()
 
-	// Auto-set upload URL: use HAProxy/Nginx in prod (Go :8080 not exposed)
+	// Auto-set upload URL. In prod, proxy uploads are preferred.
+	// In dev, if proxy endpoint is unreachable but Go :8080 is reachable, fallback to :8080.
 	if *uploadURL == "" {
 		if *useHA {
 			*uploadURL = fmt.Sprintf("http://%s:8888", *host)
@@ -97,6 +100,7 @@ func main() {
 		} else {
 			*uploadURL = fmt.Sprintf("http://%s:8080", *host)
 		}
+		uploadURLFallbackIfNeeded()
 	}
 
 	fmt.Println("═══════════════════════════════════════════")
@@ -140,6 +144,39 @@ func main() {
 
 	// ── Results ──
 	printResults(stats, assets)
+}
+
+func uploadURLFallbackIfNeeded() {
+	goURL := fmt.Sprintf("http://%s:8080", *host)
+
+	if *uploadURL == goURL {
+		return
+	}
+
+	if endpointReachable(*uploadURL) {
+		return
+	}
+	if endpointReachable(goURL) {
+		fmt.Printf("  NOTE: Upload endpoint %s unreachable, fallback to %s\n", *uploadURL, goURL)
+		*uploadURL = goURL
+	}
+}
+
+func endpointReachable(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	if u.Host == "" {
+		return false
+	}
+
+	conn, err := net.DialTimeout("tcp", u.Host, 1500*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 func discoverAssets(dir string) []AssetInfo {
@@ -447,7 +484,8 @@ func detectMIME(name string) string {
 }
 
 // detectCacheHit checks multiple cache headers:
-//   X-Cache-Status (Nginx), X-Cache (Varnish), X-Cache-Status (Go in-memory)
+//
+//	X-Cache-Status (Nginx), X-Cache (Varnish), X-Cache-Status (Go in-memory)
 func detectCacheHit(resp *http.Response) string {
 	// Nginx sets X-Cache-Status
 	if v := resp.Header.Get("X-Cache-Status"); v == "HIT" {

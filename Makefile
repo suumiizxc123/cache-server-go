@@ -5,6 +5,7 @@
 .PHONY: build run test bench dev dev-down prod prod-down clean lint \
         proto redis-cluster redis-cluster-down k8s-deploy k8s-delete helm-install helm-uninstall \
         smoke smoke-grpc smoke-assets generate-assets generate-assets-small \
+        loadtest-assets-dev loadtest-assets-dev-heavy loadtest-small-dev loadtest-small-dev-heavy \
         loadtest-small-ha loadtest-small-ha-heavy loadtest-small-ha-ultra \
         loadtest-small-nginx loadtest-small-varnish loadtest-small-ha-100k \
         swarm-init swarm-deploy swarm-down swarm-ps swarm-logs
@@ -218,6 +219,19 @@ loadtest-assets:
 
 loadtest-assets-heavy:
 	go run ./scripts/asset_loadtest.go -host=$(HOST) -n 20000 -c 200
+
+# ── Local DEV stack tests (docker-compose.yml) ──
+loadtest-assets-dev:
+	go run ./scripts/asset_loadtest_local.go
+
+loadtest-assets-dev-heavy:
+	go run ./scripts/asset_loadtest_local.go -n 20000 -c 200
+
+loadtest-small-dev:
+	go run ./scripts/asset_loadtest_local.go -assets=sample-assets-small
+
+loadtest-small-dev-heavy:
+	go run ./scripts/asset_loadtest_local.go -assets=sample-assets-small -n 20000 -c 200
 
 loadtest-assets-nginx:
 	go run ./scripts/asset_loadtest.go -host=$(HOST) -nginx=true

@@ -1,5 +1,43 @@
 # ═══════════════════════════════════════════════════════
-#  Cache Server — Quick Reference
+#  Cache Server — Quick Reference & Guide
+# ═══════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════
+#  1. ARCHITECTURE
+# ═══════════════════════════════════════════════════════
+#
+#  Request Flow (PROD):
+#    Client → HAProxy(:8888) → Varnish(:6081) → Nginx(:80) → MinIO(:9000)
+#                  │                │                │              │
+#           Load Balancer      RAM Cache       Disk Cache      Object Storage
+#              (L4/L7)          (L0, 4GB)      (L1, 10GB)       (Origin)
+#
+#  Request Flow (DEV):
+#    Client → Nginx(:80) → Go Server(:8080) → Redis + MinIO
+#
+#  Cache давхаргууд:
+#    L0: Varnish (RAM, 4GB)     — хамгийн хурдан, /assets/* 7 хоног
+#    L1: Nginx (disk, 10GB)     — дискнээс, /assets/* 7 хоног
+#    L2: Go in-memory (512MB)   — LRU cache, size-based eviction
+#    L3: Redis (metadata only)  — key-value metadata
+#    Origin: MinIO              — S3-compatible object storage
+#
+#  Портууд:
+#    :8888  HAProxy (prod, K8s iptables :80 эзэлсэн тул)
+#    :6081  Varnish direct
+#    :8081  Nginx direct (host port)
+#    :80    Nginx (container дотор)
+#    :8080  Go server (DEV only, prod-д нээгдээгүй)
+#    :9000  MinIO API
+#    :9001  MinIO Console
+#    :6379  Redis
+#
+#  Header-үүд:
+#    X-Cache: HIT/MISS          — Varnish тавина
+#    X-Cache-Status: HIT/MISS   — Nginx тавина
+
+# ═══════════════════════════════════════════════════════
+#  2. GETTING STARTED
 # ═══════════════════════════════════════════════════════
 
 # ── DEV (хурдан, хөнгөн) ──
@@ -13,35 +51,51 @@ make prod-down
 make prod-ps                # status харах
 make prod-logs              # бүх log
 
+# ── Swarm (replicas удирдах) ──
+make swarm-init             # 1 удаа ажиллуулна
+make swarm-deploy           # docker stack deploy
+make swarm-down
+make swarm-ps               # service status
+
 # ═══════════════════════════════════════════════════════
-#  Load Test Commands
+#  3. LOAD TESTING
 # ═══════════════════════════════════════════════════════
 
-# ── Standard (5000 reqs, 50 workers) ──
-make loadtest-assets-ha HOST=172.16.22.24         # HAProxy → Varnish → Nginx → MinIO (full stack)
-make loadtest-assets-varnish HOST=172.16.22.24    # Varnish → Nginx → MinIO (bypass HAProxy)
-make loadtest-assets-nginx HOST=172.16.22.24      # Nginx → MinIO (disk cache only)
-make loadtest-assets HOST=localhost                # Go direct (DEV only, :8080 prod-д нээгдээгүй!)
+# ── Big Assets (28 файл, ~100MB, video/image/font) ──
+make generate-assets                                         # sample-assets/ руу generate
+make loadtest-assets-dev                                     # local dev (full assets)
+make loadtest-assets-dev-heavy                               # local dev heavy (full assets)
+make loadtest-assets-ha HOST=172.16.22.24                    # 5K reqs, 50 workers
+make loadtest-assets-ha-heavy HOST=172.16.22.24              # 20K reqs, 200 workers
+make loadtest-assets-varnish HOST=172.16.22.24               # Varnish шууд
+make loadtest-assets-nginx HOST=172.16.22.24                 # Nginx шууд
 
-# ── Heavy (20000 reqs, 200 workers) ──
-make loadtest-assets-ha-heavy HOST=172.16.22.24       # Full stack stress test
-make loadtest-assets-varnish-heavy HOST=172.16.22.24  # Varnish stress test
-make loadtest-assets-nginx-heavy HOST=172.16.22.24    # Nginx stress test
-
-# ── Small Assets (жижиг файл, Varnish RAM-д optimized, 200 файл ~16KB avg) ──
-make loadtest-small-ha HOST=172.16.22.24              # Standard (5000 reqs, 50 workers)
-make loadtest-small-ha-heavy HOST=172.16.22.24        # Heavy (20000 reqs, 200 workers)
-make loadtest-small-ha-ultra HOST=172.16.22.24        # Ultra (50000 reqs, 500 workers)
-make loadtest-small-nginx HOST=172.16.22.24           # Nginx direct
-make loadtest-small-varnish HOST=172.16.22.24         # Varnish direct
-make generate-assets-small                            # 200 файл дахин generate хийх
+# ── Small Assets (200 файл, ~3MB, Varnish RAM-д optimize) ──
+make generate-assets-small                                   # sample-assets-small/ руу generate
+make loadtest-small-dev                                      # local dev (localhost:8080)
+make loadtest-small-dev-heavy                                # local dev heavy
+make loadtest-small-ha HOST=172.16.22.24                     # 5K reqs, 50 workers
+make loadtest-small-ha-heavy HOST=172.16.22.24               # 20K reqs, 200 workers
+make loadtest-small-ha-ultra HOST=172.16.22.24               # 50K reqs, 500 workers
+make loadtest-small-ha-100k HOST=172.16.22.24                # 100K reqs, 1000 workers
+make loadtest-small-nginx HOST=172.16.22.24                  # Nginx шууд
+make loadtest-small-varnish HOST=172.16.22.24                # Varnish шууд
 
 # ── Read-only (upload алгасах, зөвхөн уншилт) ──
 go run ./scripts/asset_loadtest.go -host=172.16.22.24 -ha=true -read-only
 go run ./scripts/asset_loadtest.go -host=172.16.22.24 -ha=true -read-only -n 50000 -c 500
 
+# ── Custom (аль ч параметр өөрчлөх боломжтой) ──
+go run ./scripts/asset_loadtest.go \
+    -host=172.16.22.24 \
+    -ha=true \
+    -assets=sample-assets-small \
+    -n 100000 \
+    -c 1000 \
+    -read-only
+
 # ═══════════════════════════════════════════════════════
-#  Tricks & Tips
+#  4. TRICKS & TIPS
 # ═══════════════════════════════════════════════════════
 
 # АНХААРУУЛГА: Server дээр K8s (Kubeflow) iptables-legacy порт 80-г эзлэсэн!
@@ -55,51 +109,102 @@ go run ./scripts/asset_loadtest.go -host=172.16.22.24 -ha=true -read-only -n 500
 #   -ha / -varnish горим          → :8888 (HAProxy) руу upload хийнэ
 #   default (Go direct)           → :8080 руу upload хийнэ (зөвхөн dev)
 
-# Cache давхаргууд:
-#   L0: Varnish (RAM, 4GB)     — хамгийн хурдан, /assets/* 7 хоног
-#   L1: Nginx (disk, 10GB)     — дискнээс, /assets/* 7 хоног
-#   L2: Go in-memory (512MB)   — LRU cache, size-based eviction
-#   L3: Redis (metadata only)  — key-value metadata
-#   Origin: MinIO              — S3-compatible object storage
+# Nginx cache цэвэрлэх (cached 404 болон бусад):
+#   docker compose exec nginx rm -rf /var/cache/nginx/assets
+#   docker compose exec nginx nginx -s reload
 
-# Header-үүд:
-#   X-Cache: HIT/MISS          — Varnish тавина
-#   X-Cache-Status: HIT/MISS   — Nginx тавина
+# Varnish cache цэвэрлэх:
+#   curl -X PURGE http://172.16.22.24:6081/assets/filename.png
 
-# ── Monitoring (prod only) ──
+# ═══════════════════════════════════════════════════════
+#  5. 10 Gbps TUNING GUIDE
+# ═══════════════════════════════════════════════════════
+#
+#  Алхам 1: OS kernel tuning (server дээр 1 удаа)
+sudo bash scripts/sysctl-10g.sh
+#
+#  Алхам 2: Prod deploy (config аль хэдийн tuned)
+make prod
+#
+#  Алхам 3: 100K тест ажиллуулах
+make loadtest-small-ha-100k HOST=172.16.22.24
+#
+#  Юу өөрчлөгдсөн (10 Gbps):
+#    ┌──────────────┬────────────────────┬────────────────────────────────┐
+#    │ Компонент    │ Өмнөх              │ 10 Gbps                       │
+#    ├──────────────┼────────────────────┼────────────────────────────────┤
+#    │ HAProxy      │ maxconn 4K, 128MB  │ maxconn 100K, 512MB, 4thread  │
+#    │ Varnish      │ 1GB RAM, 1K thread │ 4GB RAM, 5K thread, 4 pools   │
+#    │ Nginx        │ 4 workers, 16K conn│ auto workers, 65K conn, 10GB  │
+#    │ Docker       │ default sysctls    │ somaxconn=65535                │
+#    │ OS Kernel    │ default            │ TCP buf 16MB, file-max 2M     │
+#    └──────────────┴────────────────────┴────────────────────────────────┘
+#
+#  Config файлууд:
+#    haproxy/haproxy.cfg           — maxconn, nbthread, bufsize
+#    varnish/default.vcl           — cache policy, TTL
+#    nginx/nginx.conf              — workers, buffers, disk cache
+#    docker-compose.prod.yml       — memory limits, sysctls, Varnish args
+#    scripts/sysctl-10g.sh         — OS kernel TCP/network tuning
+
+# ═══════════════════════════════════════════════════════
+#  6. MONITORING
+# ═══════════════════════════════════════════════════════
+#
 # Grafana:      http://172.16.22.24:3000  (admin/admin)
 # Prometheus:   http://172.16.22.24:9091
 # HAProxy:      http://172.16.22.24:8404/stats
 # MinIO:        http://172.16.22.24:9001  (minioadmin/minioadmin)
 # Alertmanager: http://172.16.22.24:9093
 
-# ── Docker debug ──
+# ═══════════════════════════════════════════════════════
+#  7. DEBUG COMMANDS
+# ═══════════════════════════════════════════════════════
+
+# ── Docker logs ──
 docker compose -f docker-compose.yml -f docker-compose.prod.yml logs -f varnish
+docker compose -f docker-compose.yml -f docker-compose.prod.yml logs -f nginx
+docker compose -f docker-compose.yml -f docker-compose.prod.yml logs -f haproxy
+
+# ── Container доторх debug ──
 docker compose -f docker-compose.yml -f docker-compose.prod.yml exec varnish varnishstat  # Varnish stats
 docker compose -f docker-compose.yml -f docker-compose.prod.yml exec varnish varnishlog   # Varnish log
 docker compose -f docker-compose.yml -f docker-compose.prod.yml exec nginx nginx -T       # Nginx config dump
 docker compose -f docker-compose.yml -f docker-compose.prod.yml exec redis redis-cli info # Redis info
 
-# ═══════════════════════════════════════════════════════
-#  10 Gbps Tuning
-# ═══════════════════════════════════════════════════════
+# ── Cache header шалгах ──
+curl -sI http://172.16.22.24:8888/assets/test.png | grep -E "X-Cache|HTTP"
+#   X-Cache: HIT       → Varnish RAM cache-ээс
+#   X-Cache-Status: HIT → Nginx disk cache-ээс
 
-# 1. OS kernel tuning (server дээр 1 удаа ажиллуулна):
-sudo bash scripts/sysctl-10g.sh
+# ── Network хурд шалгах ──
+ethtool eth0 | grep Speed         # NIC speed (1G/10G/25G)
+iperf3 -s                         # server дээр
+iperf3 -c 172.16.22.24            # client-ээс
 
-# 2. Prod deploy (config-ууд аль хэдийн tuned):
-make prod                                # auto: Varnish 4GB RAM, Nginx 10GB disk, HAProxy 100K conn
-
-# 3. 100K тест:
-make loadtest-small-ha-100k HOST=172.16.22.24
-
-# Юу өөрчлөгдсөн (10 Gbps):
-#   HAProxy:  maxconn 4096 → 100000, nbthread 4, bufsize 32K, timeout 120s
-#   Varnish:  malloc 1G → 4G, threads 1000 → 5000, thread_pools 2 → 4
-#   Nginx:    workers auto, connections 65536, buffers 2x, disk cache 10G, reuseport
-#   Docker:   sysctls somaxconn=65535, memory limits up
-#   OS:       TCP buffers 16MB, file-max 2M, fastopen, tw_reuse
-
-# ── Rebuild зөвхөн Go server (image cache алгасах) ──
+# ── Rebuild зөвхөн Go server ──
 docker compose -f docker-compose.yml -f docker-compose.prod.yml build --no-cache cache-server
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d cache-server
+
+# ═══════════════════════════════════════════════════════
+#  8. FILE STRUCTURE
+# ═══════════════════════════════════════════════════════
+#
+#  cache-server-go/
+#  ├── cmd/server/             # Go server entry point
+#  ├── internal/cache/         # LRU cache implementation
+#  ├── haproxy/haproxy.cfg     # HAProxy config
+#  ├── varnish/default.vcl     # Varnish VCL config
+#  ├── nginx/nginx.conf        # Nginx config
+#  ├── redis/sentinel.conf     # Redis Sentinel config
+#  ├── scripts/
+#  │   ├── asset_loadtest.go       # Binary content load test
+#  │   ├── generate_assets.sh      # Generate big test assets (~100MB)
+#  │   ├── generate_small_assets.sh # Generate small test assets (~3MB)
+#  │   └── sysctl-10g.sh           # OS kernel tuning for 10Gbps
+#  ├── sample-assets/          # Big test files (video, image, font)
+#  ├── sample-assets-small/    # Small test files (200 x ~16KB)
+#  ├── docker-compose.yml      # DEV stack
+#  ├── docker-compose.prod.yml # PROD overrides
+#  ├── Makefile                # Бүх команд
+#  └── hint.txt                # ЭНЭ ФАЙЛ
