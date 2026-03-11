@@ -213,6 +213,7 @@ generate-assets-small:
 # Use HOST=172.16.22.24 to test against a remote server
 # Use --nginx=true to test via Nginx (port 80), default uses Go server (port 8080)
 HOST ?= localhost
+LOCAL_HOST ?= 127.0.0.1
 
 loadtest-assets:
 	go run ./scripts/asset_loadtest.go -host=$(HOST)
@@ -222,16 +223,16 @@ loadtest-assets-heavy:
 
 # ── Local DEV stack tests (docker-compose.yml) ──
 loadtest-assets-dev:
-	go run ./scripts/asset_loadtest_local.go
+	go run ./scripts/asset_loadtest_local.go -host=$(LOCAL_HOST)
 
 loadtest-assets-dev-heavy:
-	go run ./scripts/asset_loadtest_local.go -n 20000 -c 200
+	go run ./scripts/asset_loadtest_local.go -host=$(LOCAL_HOST) -n 20000 -c 200
 
 loadtest-small-dev:
-	go run ./scripts/asset_loadtest_local.go -assets=sample-assets-small
+	go run ./scripts/asset_loadtest_local.go -host=$(LOCAL_HOST) -assets=sample-assets-small
 
 loadtest-small-dev-heavy:
-	go run ./scripts/asset_loadtest_local.go -assets=sample-assets-small -n 20000 -c 200
+	go run ./scripts/asset_loadtest_local.go -host=$(LOCAL_HOST) -assets=sample-assets-small -n 20000 -c 200
 
 loadtest-assets-nginx:
 	go run ./scripts/asset_loadtest.go -host=$(HOST) -nginx=true

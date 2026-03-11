@@ -2,9 +2,12 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Local wrapper for asset_loadtest.go:
@@ -20,11 +23,21 @@ func main() {
 		os.Exit(2)
 	}
 
-	if !hasFlag(args, "host") {
-		args = append(args, "-host=127.0.0.1")
+	effectiveHost := getFlagValue(args, "host")
+	if effectiveHost == "" {
+		effectiveHost = "127.0.0.1"
+		args = append(args, "-host="+effectiveHost)
 	}
+
+	// If provided host is unreachable, fallback to local dev endpoint.
+	if !serverReachable(effectiveHost) && effectiveHost != "127.0.0.1" && serverReachable("127.0.0.1") {
+		fmt.Fprintf(os.Stderr, "NOTE: %s:8080 unreachable, falling back to 127.0.0.1:8080\n", effectiveHost)
+		effectiveHost = "127.0.0.1"
+		args = upsertFlag(args, "host", effectiveHost)
+	}
+
 	if !hasFlag(args, "upload") {
-		args = append(args, "-upload=http://127.0.0.1:8080")
+		args = append(args, "-upload=http://"+effectiveHost+":8080")
 	}
 
 	cmdArgs := append([]string{"run", "./scripts/asset_loadtest.go"}, args...)
@@ -53,6 +66,23 @@ func hasFlag(args []string, name string) bool {
 	return false
 }
 
+func getFlagValue(args []string, name string) string {
+	short := "-" + name + "="
+	long := "--" + name + "="
+	for i, a := range args {
+		if strings.HasPrefix(a, short) {
+			return strings.TrimPrefix(a, short)
+		}
+		if strings.HasPrefix(a, long) {
+			return strings.TrimPrefix(a, long)
+		}
+		if (a == "-"+name || a == "--"+name) && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
 func hasAny(args []string, values ...string) bool {
 	set := make(map[string]struct{}, len(values))
 	for _, v := range values {
@@ -64,4 +94,38 @@ func hasAny(args []string, values ...string) bool {
 		}
 	}
 	return false
+}
+
+func upsertFlag(args []string, name, value string) []string {
+	shortEq := "-" + name + "="
+	longEq := "--" + name + "="
+	short := "-" + name
+	long := "--" + name
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if strings.HasPrefix(a, shortEq) {
+			args[i] = shortEq + value
+			return args
+		}
+		if strings.HasPrefix(a, longEq) {
+			args[i] = longEq + value
+			return args
+		}
+		if (a == short || a == long) && i+1 < len(args) {
+			args[i+1] = value
+			return args
+		}
+	}
+	return append(args, shortEq+value)
+}
+
+func serverReachable(host string) bool {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://" + host + ":8080/health")
+	if err != nil {
+		return false
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 500
 }
